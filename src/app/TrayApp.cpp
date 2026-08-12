@@ -206,6 +206,9 @@ void TrayApp::buildMenu() {
     enabledAction_->setCheckable(true);
     enabledAction_->setChecked(settings_.enabled);
     connect(enabledAction_, &QAction::toggled, this, [this](bool on) { setEnabled(on); });
+    // No scroll engine off-macOS (hires firmware scrolls natively) — a
+    // toggle that flips nothing would only confuse.
+    enabledAction_->setVisible(false);
 
     auto *settingsAction = menu_->addAction(tr("Settings…"));
     connect(settingsAction, &QAction::triggered, this, [this] { openSettings(); });
@@ -218,27 +221,27 @@ void TrayApp::buildMenu() {
     tray_.setContextMenu(menu_);
 }
 
-// Simple template-style glyph: a knob (circle) with an index notch.
+// Simple knob glyph (circle + index notch). Windows tray backgrounds are
+// dark by default and there's no template-tinting there, so draw light.
 QIcon TrayApp::makeIcon(bool connected) const {
+    const QColor ink = QColor(0xE8, 0xE8, 0xE8);
     QPixmap pm(36, 36);
     pm.fill(Qt::transparent);
     {
         QPainter p(&pm);
         p.setRenderHint(QPainter::Antialiasing);
-        QPen pen(Qt::black, 3);
+        QPen pen(ink, 3);
         p.setPen(pen);
         p.setBrush(Qt::NoBrush);
         p.drawEllipse(QRectF(4, 4, 28, 28));
         p.drawLine(QPointF(18, 6), QPointF(18, 13));
         if (connected) {
-            p.setBrush(Qt::black);
+            p.setBrush(ink);
             p.drawEllipse(QRectF(15, 19, 6, 6));
         }
     }
     pm.setDevicePixelRatio(2.0);
-    QIcon icon(pm);
-    icon.setIsMask(true);
-    return icon;
+    return QIcon(pm);
 }
 
 #endif // !Q_OS_MACOS
