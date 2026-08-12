@@ -57,6 +57,7 @@ struct MacScrollEngine::Impl {
 
     // --- engine-thread state ---
     std::thread thread;
+    std::atomic<bool> running{false}; // tap created and runloop spinning
     CFRunLoopRef runLoop = nullptr;
     CFMachPortRef tap = nullptr;
     CFRunLoopSourceRef tapSource = nullptr;
@@ -261,7 +262,9 @@ struct MacScrollEngine::Impl {
 
         int64_t counts = CGEventGetIntegerValueField(event, kCGScrollWheelEventDeltaAxis1);
         if (counts == 0) {
-            return nullptr; // knob event with no vertical wheel action: drop
+            // No vertical action (e.g. a future horizontal-wheel profile):
+            // pass through untouched, we only own the vertical axis.
+            return event;
         }
         if (invert.load(std::memory_order_relaxed)) {
             counts = -counts;
@@ -361,6 +364,9 @@ struct MacScrollEngine::Impl {
                 },
                 this);
             if (!tap) {
+                // A thread's CFRunLoop is freed at thread exit — leaving the
+                // pointer set would hand stop() a dangling runloop.
+                runLoop = nullptr;
                 ready.set_value(false);
                 return;
             }
@@ -378,6 +384,7 @@ struct MacScrollEngine::Impl {
             setupHidWatch();
             notifyPresence();
 
+            running.store(true);
             ready.set_value(true);
             CFRunLoopRun();
 
@@ -404,6 +411,7 @@ struct MacScrollEngine::Impl {
                 tap = nullptr;
             }
             runLoop = nullptr;
+            running.store(false);
         });
 
         return readyFuture.get();
@@ -441,8 +449,11 @@ bool MacScrollEngine::start() {
         return false;
     }
 
-    if (impl_->thread.joinable()) {
+    if (impl_->running.load()) {
         return true; // already running
+    }
+    if (impl_->thread.joinable()) {
+        impl_->thread.join(); // reap a thread left over from a failed start
     }
     if (!impl_->startThread()) {
         if (permissionMissing) {
