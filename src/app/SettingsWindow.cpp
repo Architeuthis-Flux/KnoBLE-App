@@ -1,8 +1,8 @@
 #include "app/SettingsWindow.h"
 #include "app/Keycodes.h"
 
-#ifdef Q_OS_MACOS
-#include "app/mac/KnobHidChannel.h"
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+#include "app/KnobHidChannel.h"
 #endif
 
 #include <QCheckBox>
@@ -87,12 +87,16 @@ SettingsWindow::SettingsWindow(ScrollEngineSettings initial, KnobHidChannel *cha
     layout->addWidget(banner_);
 
     auto *tabs = new QTabWidget;
+#ifdef Q_OS_MACOS
+    // The scroll engine (and its feel controls) exist only on macOS —
+    // Windows/Linux scroll natively via the hires firmware.
     tabs->addTab(buildScrollingTab(), tr("Scrolling"));
+#endif
     tabs->addTab(buildKeysTab(), tr("Controls"));
     tabs->addTab(buildDeviceTab(), tr("Device"));
     layout->addWidget(tabs);
 
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     if (channel_) {
         connect(channel_, &KnobHidChannel::presentChanged, this,
                 &SettingsWindow::onChannelPresent);
@@ -219,7 +223,7 @@ QWidget *SettingsWindow::buildKeysTab() {
         connect(keyCombo_[slot], &QComboBox::activated, this, [this, slot] {
             const uint32_t encoded = keyCombo_[slot]->currentData().toUInt();
             keyCodes_[slot] = encoded;
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
             if (channel_) {
                 channel_->setKey((uint8_t)slot, encoded); // staged: try it now
                 keysStatus_->setText(tr("Staged — try the key, then Save to keep it."));
@@ -328,7 +332,7 @@ QWidget *SettingsWindow::buildKeysTab() {
     layout->addLayout(buttonRow);
     layout->addStretch(1);
 
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     connect(saveButton_, &QPushButton::clicked, this, [this] {
         if (channel_) {
             channel_->commit();
@@ -388,7 +392,7 @@ void SettingsWindow::onChannelPresent(bool present) {
     if (present) {
         keysHint_->setText(tr("Connected over USB — changes stage instantly."));
         keysLoaded_ = false;
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
         if (channel_) {
             channel_->requestKeys();
             channel_->requestPotConfig();
@@ -401,7 +405,7 @@ void SettingsWindow::onChannelPresent(bool present) {
         keysHint_->setText(tr("🔌 Plug the knob in over USB to remap keys and the pot. (Scroll "
                               "smoothing works over Bluetooth; the settings channel is USB for "
                               "now.)"));
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
         if (potTimer_) {
             potTimer_->stop();
         }
@@ -493,7 +497,7 @@ void SettingsWindow::onPotValue(int raw, int role, int semantic) {
 }
 
 void SettingsWindow::sendPotConfig() {
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     if (channel_) {
         channel_->setPotConfig((uint8_t)potRole_, (uint8_t)potSpeedMax_,
                                (uint8_t)potSpeedMinDiv_, (uint8_t)potSteps_);
@@ -563,6 +567,7 @@ void SettingsWindow::refreshBanner() {
     if (!banner_) {
         return;
     }
+#ifdef Q_OS_MACOS
     if (deviceConnected_ && rawCounts_) {
         banner_->setText(tr("● Knob connected — smooth scrolling active (raw counts)"));
         banner_->setProperty("state", "good");
@@ -575,6 +580,19 @@ void SettingsWindow::refreshBanner() {
                             "scrolling, then relaunch"));
         banner_->setProperty("state", "warn");
     }
+#else
+    // Windows: this app is the configurator; smooth scrolling comes from the
+    // hires firmware, which Windows handles natively — no engine needed.
+    if (deviceConnected_) {
+        banner_->setText(tr("● Knob connected over USB — configure below. For smooth "
+                            "scrolling, flash the hires firmware (see the KnoBLE README)."));
+        banner_->setProperty("state", "good");
+    } else {
+        banner_->setText(tr("○ Knob not detected on USB — plug it in to configure. "
+                            "(Scrolling works over Bluetooth regardless.)"));
+        banner_->setProperty("state", "warn");
+    }
+#endif
     banner_->style()->unpolish(banner_);
     banner_->style()->polish(banner_);
 }
@@ -597,6 +615,7 @@ QString SettingsWindow::buildReport() const {
     report += QStringLiteral("Device:           %1 (VID 0x1d50, PID 0x615e)\n")
                   .arg(deviceConnected_ ? QStringLiteral("connected")
                                         : QStringLiteral("not connected"));
+#ifdef Q_OS_MACOS
     report += QStringLiteral("\n-- Host (this app, live) --\n");
     report += QStringLiteral("Speed:            %1 px/count\n").arg(current_.pxPerCount);
     report += QStringLiteral("Response:         %1 ms\n").arg(current_.responseMs);
@@ -608,6 +627,11 @@ QString SettingsWindow::buildReport() const {
                            ? QStringLiteral("raw HID (exact, acceleration-free)")
                            : QStringLiteral("intercepted events (OS curve!) — grant Input "
                                             "Monitoring"));
+#else
+    report += QStringLiteral("\n-- Host (this app) --\n");
+    report += QStringLiteral("Scroll engine:    none on this OS (native handling; hires "
+                             "firmware recommended)\n");
+#endif
     report += QStringLiteral("\n-- Keys (%1) --\n")
                   .arg(keysLoaded_ ? QStringLiteral("live from knob")
                                    : QStringLiteral("defaults; connect USB for live values"));
@@ -654,6 +678,9 @@ void SettingsWindow::refreshReport() {
 }
 
 void SettingsWindow::checkLinearMouseConflict() {
+    if (!conflictLabel_) {
+        return; // no scrolling tab on this platform
+    }
     const QString path = QDir::homePath() + "/.config/linearmouse/linearmouse.json";
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {

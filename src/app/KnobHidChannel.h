@@ -4,11 +4,15 @@
 #include <cstdint>
 
 // Client for the knob's raw-HID settings channel (QMK-shaped: usage page
-// 0xFF60, usage 0x61, 32-byte frames, USB only for now). Runs on the Qt main
-// thread — Qt's macOS event dispatcher services the main CFRunLoop, so
-// IOHIDManager callbacks land here directly.
-//
-// Uses the same Input Monitoring grant as the scroll engine.
+// 0xFF60, usage 0x61, 32-byte frames, USB only for now). One implementation
+// per platform behind this header:
+//   mac/KnobHidChannel.mm    — IOHIDManager on the main CFRunLoop (Qt's macOS
+//                              dispatcher services it); shares the Input
+//                              Monitoring grant with the scroll engine.
+//   win/KnobHidChannelWin.cpp — SetupAPI enumeration + hid.dll I/O; a reader
+//                              thread marshals frames back via queued calls.
+//                              No special permissions on Windows.
+// All signals are emitted on the object's (GUI) thread on both platforms.
 class KnobHidChannel : public QObject {
     Q_OBJECT
 
@@ -39,6 +43,11 @@ signals:
     void potValue(int raw, int role, int semantic);
 
 private:
+    // Reader-thread drop notification (queued to the GUI thread). Windows
+    // uses it to tear down and resume scanning; a no-op on macOS, where
+    // IOHIDManager's removal callback covers it.
+    void deviceDropped();
+
     struct Impl;
     Impl *impl_;
 };

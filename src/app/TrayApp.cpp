@@ -1,8 +1,9 @@
 #include "app/TrayApp.h"
 #include "app/SettingsWindow.h"
 
+#include "app/KnobHidChannel.h"
+
 #ifdef Q_OS_MACOS
-#include "app/mac/KnobHidChannel.h"
 #include "app/mac/MacTray.h"
 #include "engine/mac/MacScrollEngine.h"
 #else
@@ -31,7 +32,19 @@ TrayApp::TrayApp() {
 
 #ifdef Q_OS_MACOS
     engine_ = std::make_unique<MacScrollEngine>(knobDevices());
+#endif
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     channel_ = std::make_unique<KnobHidChannel>();
+#endif
+
+#ifndef Q_OS_MACOS
+    // No scroll engine off-macOS (Windows/Linux get smooth scrolling from
+    // the hires firmware natively) — device presence comes from the
+    // settings channel instead.
+    if (channel_) {
+        connect(channel_.get(), &KnobHidChannel::presentChanged, this,
+                &TrayApp::onDevicePresence);
+    }
 #endif
 
     if (engine_) {
@@ -99,7 +112,10 @@ void TrayApp::showPermissionAction(bool visible) {
 
 void TrayApp::startEngine() {
     if (!engine_) {
-        showStatus(tr("No engine for this OS yet"));
+        // Windows/Linux: no engine by design — the hires firmware scrolls
+        // smoothly natively; this app is the configurator.
+        showStatus(channel_ && channel_->channelPresent() ? tr("Knob: connected (USB)")
+                                                          : tr("Knob: not detected on USB"));
         return;
     }
     if (engine_->start()) {
@@ -109,11 +125,7 @@ void TrayApp::startEngine() {
 
 void TrayApp::openSettings() {
     if (!settingsWindow_) {
-#ifdef Q_OS_MACOS
         settingsWindow_ = new SettingsWindow(settings_, channel_.get());
-#else
-        settingsWindow_ = new SettingsWindow(settings_, nullptr);
-#endif
         settingsWindow_->setAttribute(Qt::WA_DeleteOnClose);
         connect(settingsWindow_, &QObject::destroyed, this,
                 [this] { settingsWindow_ = nullptr; });
@@ -157,9 +169,11 @@ void TrayApp::onRawCounts(bool active) {
 
 void TrayApp::refreshStatusLine() {
     QString status = deviceConnected_ ? tr("Knob: connected") : tr("Knob: not connected");
+#ifdef Q_OS_MACOS
     if (!rawCounts_) {
         status += tr(" — grant Input Monitoring for exact counts");
     }
+#endif
     showStatus(status);
 }
 

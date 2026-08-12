@@ -7,12 +7,15 @@ set -e
 cd "$(dirname "$0")/.."
 
 IDENTITY="${1:-}"
-CMAKE_ARGS="-DCMAKE_PREFIX_PATH=/opt/homebrew/opt/qt -DCMAKE_BUILD_TYPE=Release"
+# Quote-safe: the identity contains spaces and parentheses (POSIX sh, no
+# arrays — hence the duplicated command).
 if [ -n "$IDENTITY" ]; then
-    CMAKE_ARGS="$CMAKE_ARGS -DKNOB_CODESIGN_IDENTITY=$IDENTITY"
+    cmake -B build-release -G Ninja -DCMAKE_PREFIX_PATH=/opt/homebrew/opt/qt \
+        -DCMAKE_BUILD_TYPE=Release "-DKNOB_CODESIGN_IDENTITY=$IDENTITY"
+else
+    cmake -B build-release -G Ninja -DCMAKE_PREFIX_PATH=/opt/homebrew/opt/qt \
+        -DCMAKE_BUILD_TYPE=Release
 fi
-
-cmake -B build-release -G Ninja $CMAKE_ARGS
 cmake --build build-release
 
 # Bundle Qt frameworks so the app runs on machines without Homebrew Qt.

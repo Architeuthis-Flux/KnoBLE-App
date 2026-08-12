@@ -1,0 +1,70 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.7.*"
+          arch: win64_msvc2019_64
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Deploy Qt runtime
+        shell: pwsh
+        run: |
+          mkdir dist
+          # Single-config generators put the exe in build/, VS puts it in build/Release/
+          $exe = Get-ChildItem -Recurse build -Filter KnobApp.exe | Select-Object -First 1
+          Copy-Item $exe.FullName dist/Knob.exe
+          windeployqt --release --no-translations dist/Knob.exe
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Knob-windows
+          path: dist/
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.7.*"
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Bundle + DMG (unsigned — sign/notarize locally for release)
+        run: |
+          macdeployqt build/KnobApp.app -always-overwrite
+          STAGE=$(mktemp -d)
+          cp -R build/KnobApp.app "$STAGE/Knob.app"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "Knob" -srcfolder "$STAGE" -ov -format UDZO Knob.dmg
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Knob-macos
+          path: Knob.dmg

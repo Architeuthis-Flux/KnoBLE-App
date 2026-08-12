@@ -12,6 +12,7 @@ set(SOURCES
     src/main.cpp
     src/app/Config.h
     src/app/Keycodes.h
+    src/app/KnobHidChannel.h
     src/app/TrayApp.h
     src/app/TrayApp.cpp
     src/app/SettingsWindow.h
@@ -27,7 +28,6 @@ if(APPLE)
         src/engine/mac/MacScrollEngine.mm
         src/app/mac/MacTray.h
         src/app/mac/MacTray.mm
-        src/app/mac/KnobHidChannel.h
         src/app/mac/KnobHidChannel.mm
     )
     set_source_files_properties(
@@ -36,7 +36,16 @@ if(APPLE)
     )
 endif()
 
+if(WIN32)
+    list(APPEND SOURCES src/app/win/KnobHidChannelWin.cpp)
+endif()
+
 qt_add_executable(KnobApp MACOSX_BUNDLE ${SOURCES})
+
+if(WIN32)
+    set_target_properties(KnobApp PROPERTIES WIN32_EXECUTABLE TRUE) # no console window
+    target_link_libraries(KnobApp PRIVATE hid setupapi)
+endif()
 
 target_include_directories(KnobApp PRIVATE src)
 target_link_libraries(KnobApp PRIVATE Qt6::Widgets)

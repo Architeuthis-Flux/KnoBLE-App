@@ -12,19 +12,22 @@ devices. Two jobs:
    raw-HID settings channel (QMK-style, USB), with changes staged live and
    saved to the knob's flash. Detents/haptics/pot dials come next.
 
-Status: **v0.2, macOS**. Windows backend planned (low-level mouse hook +
-SendInput; the settings channel is plain hidapi and ports directly). Linux
-intentionally has no scroll backend — flash the `knoble_hires` firmware
-instead: libinput honors the HID Resolution Multiplier natively, zero host
-software needed.
+Status: **v0.3 — macOS (tested on hardware) + Windows (builds in CI,
+⚠️ not yet hardware-tested)**. The Windows app is deliberately
+configurator-only: Windows honors the hi-res wheel firmware natively, so a
+host scroll engine would only duplicate what the OS already does well.
+Linux likewise needs no app for scrolling.
 
 ## Setup per platform
 
-| Platform | Scrolling | Key remap |
+| Platform | Scrolling | Keys & pot config |
 |---|---|---|
 | macOS | this app (grant Accessibility + Input Monitoring on first run — the app walks you through it) | this app, knob plugged in over USB |
-| Windows | *(planned)* native is usable meanwhile | *(planned — same protocol via hidapi)* |
-| Linux | no app needed: flash `knoble_hires` firmware | *(planned)* |
+| Windows | flash the `knoble_hires` firmware — smooth natively, zero host software | this app (tray + Controls/Device tabs), knob over USB |
+| Linux | flash `knoble_hires` — same, zero software | *(CLI/GUI planned; protocol is plain hidapi)* |
+
+Mappings live **on the knob**, so keys/pot configured on any OS carry to
+every OS.
 
 ## How the smoothing works
 
@@ -37,7 +40,9 @@ swallows only the knob's scroll events (matched per-event via the HID sender
 ID) and re-posts phase-annotated continuous pixel scrolling at 120 Hz —
 the same event shape a trackpad produces, which is why pages glide.
 
-## Build (macOS)
+## Build
+
+**macOS:**
 
 ```bash
 brew install qt cmake ninja
@@ -45,6 +50,20 @@ cmake -B build -G Ninja -DCMAKE_PREFIX_PATH=/opt/homebrew/opt/qt
 cmake --build build
 open build/KnobApp.app
 ```
+
+**Windows** (Qt 6 + MSVC; links `hid.lib`/`setupapi.lib`, no other deps):
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+windeployqt build/Release/KnobApp.exe
+```
+
+**CI**: `.github/workflows/build.yml` builds both on every push — a
+`Knob-windows` folder artifact (exe + Qt runtime via windeployqt) and an
+unsigned `Knob-macos` DMG. For release-grade macOS artifacts build locally:
+`packaging/make-dmg.sh "Developer ID Application: …"` (bundles Qt, signs,
+makes `Knob.dmg`; notarize after — instructions in the script).
 
 First run: grant **Accessibility** to “Knob” in System Settings → Privacy &
 Security (the app prompts). The app lives in the menu bar (no Dock icon):
@@ -71,9 +90,23 @@ All changes apply live — turn the knob while dragging a slider.
 ```
 src/engine/KnobScrollModel.h   portable scroll model (no OS deps)
 src/engine/ScrollEngine.h      per-OS backend interface
-src/engine/mac/                CGEventTap backend (Objective-C++)
-src/app/                       Qt tray + settings GUI
+src/engine/mac/                CGEventTap + raw-HID backend (Objective-C++)
+src/app/                       Qt tray + settings GUI (cross-platform)
+src/app/KnobHidChannel.h       settings-channel interface (per-OS impls)
+src/app/mac/                   IOHIDManager channel + native NSStatusItem tray
+src/app/win/                   SetupAPI/hid.dll channel (⚠️ untested on hardware)
+packaging/                     make-dmg.sh (bundle Qt, sign, DMG)
 ```
+
+### Windows status, honestly
+
+The Windows build compiles in CI and uses only bedrock Win32 APIs
+(SetupAPI enumeration, overlapped `ReadFile`/`WriteFile` on the vendor HID
+collection), but it has **not been run against hardware yet**. First
+tester: grab the `Knob-windows` CI artifact, plug the knob in over USB,
+and the tray icon + Controls tab should find it within ~2 s. If it
+doesn't, the failure is almost certainly in device matching — file an
+issue with the output of Device Manager → knob → Hardware IDs.
 
 The scroll-feel research this implements lives in the
 [KnoBLE repo](https://github.com/BaselineDesign/KnoBLE)

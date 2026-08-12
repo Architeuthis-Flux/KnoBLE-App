@@ -6,9 +6,10 @@
 #include <QObject>
 #include <memory>
 
+class KnobHidChannel;
+
 #ifdef Q_OS_MACOS
 class MacTray;
-class KnobHidChannel;
 #else
 #include <QSystemTrayIcon>
 class QAction;
@@ -47,9 +48,9 @@ private:
     bool rawCounts_ = false;
     void refreshStatusLine();
 
+    std::unique_ptr<KnobHidChannel> channel_;
 #ifdef Q_OS_MACOS
     std::unique_ptr<MacTray> tray_;
-    std::unique_ptr<KnobHidChannel> channel_;
 #else
     void buildMenu();
     QIcon makeIcon(bool connected) const;

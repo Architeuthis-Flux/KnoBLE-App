@@ -1,4 +1,4 @@
-#include "app/mac/KnobHidChannel.h"
+#include "app/KnobHidChannel.h"
 
 #include <IOKit/hid/IOHIDLib.h>
 #include <IOKit/hid/IOHIDManager.h>
@@ -151,6 +151,10 @@ KnobHidChannel::~KnobHidChannel() {
 
 bool KnobHidChannel::channelPresent() const {
     return impl_->device != nullptr;
+}
+
+void KnobHidChannel::deviceDropped() {
+    // macOS: IOHIDManager's removal callback handles disconnects.
 }
 
 void KnobHidChannel::requestKeys() {
