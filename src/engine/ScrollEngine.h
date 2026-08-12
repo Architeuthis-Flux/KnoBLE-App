@@ -10,7 +10,9 @@
 #include <functional>
 
 struct ScrollEngineSettings {
-    double pxPerCount = 18.0;
+    // Default tuned for the firmware's 240 counts/rev: 4 px/count ~= 960 px
+    // per revolution. Fine counts mean small per-count steps by design.
+    double pxPerCount = 4.0;
     double responseMs = 60.0;
     bool invert = false;
     bool reportPhases = true; // tag events with gesture phases (overscroll etc.)

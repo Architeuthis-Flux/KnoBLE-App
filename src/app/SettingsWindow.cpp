@@ -24,7 +24,7 @@ namespace {
 // makes them live. Keep in sync with KnoBLE boards/shields/knoble.
 struct FirmwareDefaults {
     static constexpr int detentsPerRev = 16;
-    static constexpr int linesPerRev = 48;
+    static constexpr int linesPerRev = 240;
     static constexpr int wheelScaleMax = 4;   // pot top: ×4
     static constexpr int wheelScaleMinDiv = 5; // pot bottom: ÷5
     static constexpr int sliderCurvePower = 1; // linear pot travel
@@ -83,11 +83,12 @@ QWidget *SettingsWindow::buildScrollingTab() {
     auto *layout = new QVBoxLayout(tab);
     auto *form = new QFormLayout;
 
-    // Speed: pixels of scroll per wheel count. 48 counts/rev at the knob's
-    // x1, so 18 px/count ~= 860 px per revolution.
+    // Speed: pixels of scroll per wheel count, in 0.5 px steps (slider ticks
+    // are half-pixels). With 240 counts/rev the sweet spot is small — a few
+    // px per count — so fine steps down low matter more than a big ceiling.
     speedSlider_ = new QSlider(Qt::Horizontal);
-    speedSlider_->setRange(2, 80);
-    speedSlider_->setValue((int)current_.pxPerCount);
+    speedSlider_->setRange(1, 60); // 0.5 .. 30.0 px/count
+    speedSlider_->setValue((int)qRound(current_.pxPerCount * 2.0));
     speedValue_ = new QLabel;
     auto *speedRow = new QHBoxLayout;
     speedRow->addWidget(speedSlider_, 1);
@@ -131,7 +132,7 @@ QWidget *SettingsWindow::buildScrollingTab() {
     layout->addWidget(testerBox, 1);
 
     auto refresh = [this] {
-        speedValue_->setText(tr("%1 px").arg(speedSlider_->value()));
+        speedValue_->setText(tr("%1 px").arg(speedSlider_->value() / 2.0, 0, 'f', 1));
         responseValue_->setText(tr("%1 ms").arg(responseSlider_->value()));
     };
     refresh();
@@ -197,7 +198,7 @@ void SettingsWindow::setRawCountsActive(bool active) {
 }
 
 void SettingsWindow::emitChanged() {
-    current_.pxPerCount = speedSlider_->value();
+    current_.pxPerCount = speedSlider_->value() / 2.0;
     current_.responseMs = responseSlider_->value();
     current_.invert = invertBox_->isChecked();
     current_.reportPhases = phasesBox_->isChecked();

@@ -566,15 +566,22 @@ MacScrollEngine::~MacScrollEngine() {
 bool MacScrollEngine::start() {
     // Event taps need the Accessibility permission. Prompt on first ask; the
     // user grants it in System Settings and hits "retry" in our UI.
+    // Advisory only: on macOS 27 the preflight has been observed to report
+    // "not trusted" while the tap still creates fine. CGEventTapCreate is
+    // the real gate — attempt it regardless and believe the outcome.
     NSDictionary *options = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
-    if (!AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options)) {
-        klog("Accessibility: NOT trusted — engine cannot start");
-        if (permissionMissing) {
-            permissionMissing();
-        }
-        return false;
+    const bool axTrusted = AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    const bool listenOk = CGPreflightListenEventAccess();
+    const bool postOk = CGPreflightPostEventAccess();
+    klog("preflights: AX=%d listen=%d post=%d", axTrusted, listenOk, postOk);
+    // An active (filtering) tap listens AND posts; request both explicitly —
+    // these are the calls that actually raise the consent prompts.
+    if (!listenOk) {
+        klog("CGRequestListenEventAccess -> %d", CGRequestListenEventAccess());
     }
-    klog("Accessibility: trusted");
+    if (!postOk) {
+        klog("CGRequestPostEventAccess -> %d", CGRequestPostEventAccess());
+    }
 
     if (impl_->running.load()) {
         // Already running; the user may have just granted Input Monitoring —
