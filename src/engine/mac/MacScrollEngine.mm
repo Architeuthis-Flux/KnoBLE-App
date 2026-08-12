@@ -12,6 +12,7 @@
 #import <AppKit/AppKit.h>
 #include <ApplicationServices/ApplicationServices.h>
 #include <IOKit/IOKitLib.h>
+#include <IOKit/hidsystem/IOHIDLib.h> // IOHIDCheckAccess / IOHIDRequestAccess
 #include <IOKit/hid/IOHIDManager.h>
 #include <IOKit/hid/IOHIDUsageTables.h>
 
@@ -373,11 +374,26 @@ struct MacScrollEngine::Impl {
 
     // Opening the manager (Input Monitoring TCC) upgrades us from tapped
     // values to raw device counts. Retryable after the user grants.
+    // IOHIDCheckAccess is the truth: IOHIDManagerOpen can "succeed" while
+    // TCC silently withholds events, and it never raises the prompt itself —
+    // IOHIDRequestAccess is the API that does.
     void tryOpenForRawCounts() {
         if (!hidManager || rawCounts.load(std::memory_order_relaxed)) {
             return;
         }
-        const bool ok = IOHIDManagerOpen(hidManager, kIOHIDOptionsTypeNone) == kIOReturnSuccess;
+
+        bool ok = false;
+        if (IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) != kIOHIDAccessTypeGranted) {
+            // Shows the Input Monitoring prompt (first time) and returns the
+            // decision if one is already recorded.
+            ok = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
+        } else {
+            ok = true;
+        }
+        if (ok) {
+            ok = IOHIDManagerOpen(hidManager, kIOHIDOptionsTypeNone) == kIOReturnSuccess;
+        }
+
         rawCounts.store(ok, std::memory_order_relaxed);
         if (rawCountsActiveCb && *rawCountsActiveCb) {
             (*rawCountsActiveCb)(ok);

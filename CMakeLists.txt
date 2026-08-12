@@ -53,4 +53,17 @@ if(APPLE)
         "-framework IOKit"
         "-framework AppKit"
     )
+
+    # Signing with a real identity keeps the TCC grants (Accessibility,
+    # Input Monitoring) across rebuilds; ad-hoc signatures lose them every
+    # build. Set e.g. -DKNOB_CODESIGN_IDENTITY="Developer ID Application: …"
+    set(KNOB_CODESIGN_IDENTITY "" CACHE STRING "codesign identity for the app bundle")
+    if(KNOB_CODESIGN_IDENTITY)
+        add_custom_command(TARGET KnobApp POST_BUILD
+            COMMAND codesign --force --sign "${KNOB_CODESIGN_IDENTITY}"
+                    "$<TARGET_BUNDLE_DIR:KnobApp>"
+            COMMENT "codesign: ${KNOB_CODESIGN_IDENTITY}"
+            VERBATIM
+        )
+    endif()
 endif()
