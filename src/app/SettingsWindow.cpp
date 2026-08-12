@@ -1,23 +1,86 @@
 #include "app/SettingsWindow.h"
 
 #include <QCheckBox>
-#include <QDesktopServices>
+#include <QClipboard>
 #include <QDir>
 #include <QFile>
 #include <QFormLayout>
+#include <QGroupBox>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPainter>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSlider>
-#include <QUrl>
+#include <QTabWidget>
 #include <QVBoxLayout>
+
+namespace {
+
+// Firmware values as flashed in the current KnoBLE build (compile-time
+// devicetree). Shown read-only until the raw-HID settings channel (v0.2)
+// makes them live. Keep in sync with KnoBLE boards/shields/knoble.
+struct FirmwareDefaults {
+    static constexpr int detentsPerRev = 16;
+    static constexpr int linesPerRev = 48;
+    static constexpr int wheelScaleMax = 4;   // pot top: ×4
+    static constexpr int wheelScaleMinDiv = 5; // pot bottom: ÷5
+    static constexpr int sliderCurvePower = 1; // linear pot travel
+    static constexpr const char *keys = "prev-track / play-pause (hold: layer 1) / next-track";
+    static constexpr const char *layer1 = "knob: volume (48 detents), left key: USB↔BLE";
+};
+
+// Ruler-striped canvas for judging scroll feel: hover it and turn the knob.
+// Bands + numbered ticks make hops, stalls, and drift easy to see.
+class TesterCanvas : public QWidget {
+public:
+    explicit TesterCanvas(QWidget *parent = nullptr) : QWidget(parent) {
+        setMinimumHeight(6000);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        const QPalette pal = palette();
+        const int bandH = 25;
+        for (int y = 0; y < height(); y += bandH) {
+            const int band = y / bandH;
+            if (band % 2 == 0) {
+                p.fillRect(0, y, width(), bandH, pal.alternateBase());
+            }
+            if (band % 4 == 0) {
+                p.setPen(pal.color(QPalette::PlaceholderText));
+                p.drawLine(0, y, width(), y);
+                p.setPen(pal.color(QPalette::Text));
+                p.drawText(8, y + 17, QString::number(y));
+            }
+        }
+    }
+};
+
+} // namespace
 
 SettingsWindow::SettingsWindow(ScrollEngineSettings initial, QWidget *parent)
     : QWidget(parent), current_(initial) {
     setWindowTitle(tr("Knob Settings"));
-    setMinimumWidth(380);
+    setMinimumSize(420, 520);
 
     auto *layout = new QVBoxLayout(this);
+    auto *tabs = new QTabWidget;
+    tabs->addTab(buildScrollingTab(), tr("Scrolling"));
+    tabs->addTab(buildDeviceTab(), tr("Device"));
+    layout->addWidget(tabs);
+
+    checkLinearMouseConflict();
+    refreshReport();
+}
+
+QWidget *SettingsWindow::buildScrollingTab() {
+    auto *tab = new QWidget;
+    auto *layout = new QVBoxLayout(tab);
     auto *form = new QFormLayout;
 
     // Speed: pixels of scroll per wheel count. 48 counts/rev at the knob's
@@ -58,6 +121,15 @@ SettingsWindow::SettingsWindow(ScrollEngineSettings initial, QWidget *parent)
     conflictLabel_->hide();
     layout->addWidget(conflictLabel_);
 
+    auto *testerBox = new QGroupBox(tr("Test area — hover here and turn the knob"));
+    auto *testerLayout = new QVBoxLayout(testerBox);
+    auto *scroller = new QScrollArea;
+    scroller->setWidgetResizable(true);
+    scroller->setWidget(new TesterCanvas);
+    scroller->setMinimumHeight(180);
+    testerLayout->addWidget(scroller);
+    layout->addWidget(testerBox, 1);
+
     auto refresh = [this] {
         speedValue_->setText(tr("%1 px").arg(speedSlider_->value()));
         responseValue_->setText(tr("%1 ms").arg(responseSlider_->value()));
@@ -75,7 +147,48 @@ SettingsWindow::SettingsWindow(ScrollEngineSettings initial, QWidget *parent)
     connect(invertBox_, &QCheckBox::toggled, this, [this] { emitChanged(); });
     connect(phasesBox_, &QCheckBox::toggled, this, [this] { emitChanged(); });
 
-    checkLinearMouseConflict();
+    return tab;
+}
+
+QWidget *SettingsWindow::buildDeviceTab() {
+    auto *tab = new QWidget;
+    auto *layout = new QVBoxLayout(tab);
+
+    connectionLabel_ = new QLabel;
+    layout->addWidget(connectionLabel_);
+
+    auto *firmwareBox = new QGroupBox(tr("On-device settings (keys, slide pot, detents)"));
+    auto *fwLayout = new QVBoxLayout(firmwareBox);
+    auto *fwNote = new QLabel(
+        tr("These live in the knob's firmware. Runtime editing from this panel arrives with "
+           "the settings channel (v0.2) — until then they're compiled in, shown below as "
+           "flashed."));
+    fwNote->setWordWrap(true);
+    fwLayout->addWidget(fwNote);
+    layout->addWidget(firmwareBox);
+
+    reportView_ = new QPlainTextEdit;
+    reportView_->setReadOnly(true);
+    QFont mono("Menlo");
+    mono.setStyleHint(QFont::Monospace);
+    mono.setPointSize(11);
+    reportView_->setFont(mono);
+    layout->addWidget(reportView_, 1);
+
+    auto *copyButton = new QPushButton(tr("Copy report"));
+    connect(copyButton, &QPushButton::clicked, this,
+            [this] { QGuiApplication::clipboard()->setText(reportView_->toPlainText()); });
+    auto *buttonRow = new QHBoxLayout;
+    buttonRow->addStretch(1);
+    buttonRow->addWidget(copyButton);
+    layout->addLayout(buttonRow);
+
+    return tab;
+}
+
+void SettingsWindow::setDeviceConnected(bool connected) {
+    deviceConnected_ = connected;
+    refreshReport();
 }
 
 void SettingsWindow::emitChanged() {
@@ -85,6 +198,43 @@ void SettingsWindow::emitChanged() {
     current_.reportPhases = phasesBox_->isChecked();
     if (onChanged) {
         onChanged(current_);
+    }
+    refreshReport();
+}
+
+QString SettingsWindow::buildReport() const {
+    QString report;
+    report += QStringLiteral("== Knob settings report ==\n");
+    report += QStringLiteral("App version:      %1\n").arg(QCoreApplication::applicationVersion());
+    report += QStringLiteral("Device:           %1 (VID 0x1d50, PID 0x615e)\n")
+                  .arg(deviceConnected_ ? QStringLiteral("connected")
+                                        : QStringLiteral("not connected"));
+    report += QStringLiteral("\n-- Host (this app, live) --\n");
+    report += QStringLiteral("Speed:            %1 px/count\n").arg(current_.pxPerCount);
+    report += QStringLiteral("Response:         %1 ms\n").arg(current_.responseMs);
+    report += QStringLiteral("Invert:           %1\n").arg(current_.invert ? "yes" : "no");
+    report += QStringLiteral("Gesture phases:   %1\n").arg(current_.reportPhases ? "yes" : "no");
+    report += QStringLiteral("Smooth scrolling: %1\n").arg(current_.enabled ? "on" : "off");
+    report += QStringLiteral("\n-- Firmware (as flashed, compile-time) --\n");
+    report += QStringLiteral("Haptic detents:   %1 /rev\n").arg(FirmwareDefaults::detentsPerRev);
+    report += QStringLiteral("Wheel counts:     %1 /rev at x1\n").arg(FirmwareDefaults::linesPerRev);
+    report += QStringLiteral("Slide pot:        scroll speed, /%1 ... x%2, %3 travel\n")
+                  .arg(FirmwareDefaults::wheelScaleMinDiv)
+                  .arg(FirmwareDefaults::wheelScaleMax)
+                  .arg(FirmwareDefaults::sliderCurvePower == 1 ? QStringLiteral("linear")
+                                                               : QStringLiteral("curved"));
+    report += QStringLiteral("Keys:             %1\n").arg(FirmwareDefaults::keys);
+    report += QStringLiteral("Layer 1:          %1\n").arg(FirmwareDefaults::layer1);
+    return report;
+}
+
+void SettingsWindow::refreshReport() {
+    if (connectionLabel_) {
+        connectionLabel_->setText(deviceConnected_ ? tr("● Knob connected")
+                                                   : tr("○ Knob not connected"));
+    }
+    if (reportView_) {
+        reportView_->setPlainText(buildReport());
     }
 }
 

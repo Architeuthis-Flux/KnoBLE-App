@@ -41,6 +41,7 @@ private:
     ScrollEngineSettings settings_;
     std::unique_ptr<ScrollEngine> engine_;
     SettingsWindow *settingsWindow_ = nullptr;
+    bool deviceConnected_ = false;
 
 #ifdef Q_OS_MACOS
     std::unique_ptr<MacTray> tray_;

@@ -117,12 +117,17 @@ void TrayApp::openSettings() {
             }
         };
     }
+    settingsWindow_->setDeviceConnected(deviceConnected_);
     settingsWindow_->show();
     settingsWindow_->raise();
     settingsWindow_->activateWindow();
 }
 
 void TrayApp::onDevicePresence(bool present) {
+    deviceConnected_ = present;
+    if (settingsWindow_) {
+        settingsWindow_->setDeviceConnected(present);
+    }
     showStatus(present ? tr("Knob: connected") : tr("Knob: not connected"));
 #ifdef Q_OS_MACOS
     tray_->setConnected(present);
