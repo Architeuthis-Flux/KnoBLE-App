@@ -245,9 +245,12 @@ struct KnobHidChannel::Impl {
         switch (cmd) {
         case CmdGetInfo:
             if (status == 0) {
-                const int proto = frame[3], slots = frame[4], flags = frame[5];
+                // NB: not named "slots" — that's a Qt keyword macro that
+                // expands to nothing and breaks the declaration under MSVC.
+                const int proto = frame[3], slotCount = frame[4], flags = frame[5];
                 QMetaObject::invokeMethod(
-                    o, [=] { emit o->infoLoaded(proto, slots, flags); }, Qt::QueuedConnection);
+                    o, [=] { emit o->infoLoaded(proto, slotCount, flags); },
+                    Qt::QueuedConnection);
             }
             break;
         case CmdGetKey:

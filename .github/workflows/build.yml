@@ -15,7 +15,7 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: "6.7.*"
+          version: "6.8.*"
           arch: win64_msvc2019_64
 
       - name: Configure
@@ -47,7 +47,7 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: "6.7.*"
+          version: "6.8.*"
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
