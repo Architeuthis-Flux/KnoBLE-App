@@ -33,6 +33,32 @@ uint64_t IOHIDEventGetSenderID(IOHIDEventRef);
 
 namespace {
 
+// Diagnostic log at ~/Library/Logs/KnobApp.log, truncated each launch.
+// Cheap fprintf logging on purpose: readable after the fact without
+// wrestling the unified log, and the volume is tiny.
+FILE *g_log = nullptr;
+
+void klogOpen() {
+    if (const char *home = getenv("HOME")) {
+        std::string path = std::string(home) + "/Library/Logs/KnobApp.log";
+        g_log = fopen(path.c_str(), "w");
+    }
+}
+
+void klog(const char *fmt, ...) __printflike(1, 2);
+void klog(const char *fmt, ...) {
+    if (!g_log) {
+        return;
+    }
+    fprintf(g_log, "[%.3f] ", [NSProcessInfo processInfo].systemUptime);
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(g_log, fmt, args);
+    va_end(args);
+    fputc('\n', g_log);
+    fflush(g_log);
+}
+
 // Marks events we posted so the tap never re-processes them. ('KNOB')
 constexpr int64_t kSyntheticMarker = 0x4B4E4F42;
 
@@ -138,6 +164,8 @@ struct MacScrollEngine::Impl {
 
         std::lock_guard<std::mutex> lock(senderMutex);
         senderVerdicts[senderID] = verdict;
+        klog("senderID 0x%llx resolved: %s", (unsigned long long)senderID,
+             verdict ? "KNOB" : "other device");
         return verdict;
     }
 
@@ -201,10 +229,16 @@ struct MacScrollEngine::Impl {
         CFRelease(event);
     }
 
+    unsigned feedLogCount = 0;
+
     // Common input path for both sources; engine-thread only.
     void feedCounts(int counts) {
         if (counts == 0 || !enabled.load(std::memory_order_relaxed)) {
             return;
+        }
+        if (++feedLogCount <= 50 || feedLogCount % 100 == 0) {
+            klog("feed #%u: %+d counts (%s)", feedLogCount, counts,
+                 rawCounts.load(std::memory_order_relaxed) ? "raw HID" : "tap fallback");
         }
         if (invert.load(std::memory_order_relaxed)) {
             counts = -counts;
@@ -382,19 +416,28 @@ struct MacScrollEngine::Impl {
             return;
         }
 
+        const IOHIDAccessType access = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent);
+        klog("Input Monitoring check: %s",
+             access == kIOHIDAccessTypeGranted
+                 ? "granted"
+                 : (access == kIOHIDAccessTypeDenied ? "DENIED" : "unknown/not asked"));
         bool ok = false;
-        if (IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) != kIOHIDAccessTypeGranted) {
+        if (access != kIOHIDAccessTypeGranted) {
             // Shows the Input Monitoring prompt (first time) and returns the
             // decision if one is already recorded.
             ok = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
+            klog("IOHIDRequestAccess -> %s", ok ? "granted" : "not granted (yet)");
         } else {
             ok = true;
         }
         if (ok) {
-            ok = IOHIDManagerOpen(hidManager, kIOHIDOptionsTypeNone) == kIOReturnSuccess;
+            const IOReturn r = IOHIDManagerOpen(hidManager, kIOHIDOptionsTypeNone);
+            ok = r == kIOReturnSuccess;
+            klog("IOHIDManagerOpen -> 0x%x (%s)", r, ok ? "ok" : "FAILED");
         }
 
         rawCounts.store(ok, std::memory_order_relaxed);
+        klog("count source now: %s", ok ? "raw HID" : "tap fallback (OS curve)");
         if (rawCountsActiveCb && *rawCountsActiveCb) {
             (*rawCountsActiveCb)(ok);
         }
@@ -411,6 +454,7 @@ struct MacScrollEngine::Impl {
             CFSetRef set = IOHIDManagerCopyDevices(hidManager);
             if (set) {
                 present = CFSetGetCount(set) > 0;
+                klog("matched knob HID devices: %ld", (long)CFSetGetCount(set));
                 CFRelease(set);
             }
         }
@@ -437,12 +481,14 @@ struct MacScrollEngine::Impl {
                 },
                 this);
             if (!tap) {
+                klog("CGEventTapCreate FAILED (no Accessibility?)");
                 // A thread's CFRunLoop is freed at thread exit — leaving the
                 // pointer set would hand stop() a dangling runloop.
                 runLoop = nullptr;
                 ready.set_value(false);
                 return;
             }
+            klog("event tap created");
             tapSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0);
             CFRunLoopAddSource(runLoop, tapSource, kCFRunLoopCommonModes);
 
@@ -505,6 +551,8 @@ struct MacScrollEngine::Impl {
 
 MacScrollEngine::MacScrollEngine(std::vector<DeviceFilter> devices)
     : impl_(std::make_unique<Impl>()) {
+    klogOpen();
+    klog("engine created (%zu device filters)", devices.size());
     impl_->filters = std::move(devices);
     impl_->deviceConnectedCb = &deviceConnected;
     impl_->permissionMissingCb = &permissionMissing;
@@ -520,11 +568,13 @@ bool MacScrollEngine::start() {
     // user grants it in System Settings and hits "retry" in our UI.
     NSDictionary *options = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
     if (!AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options)) {
+        klog("Accessibility: NOT trusted — engine cannot start");
         if (permissionMissing) {
             permissionMissing();
         }
         return false;
     }
+    klog("Accessibility: trusted");
 
     if (impl_->running.load()) {
         // Already running; the user may have just granted Input Monitoring —
