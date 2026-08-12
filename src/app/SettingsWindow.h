@@ -26,6 +26,7 @@ public:
 
 public slots:
     void setDeviceConnected(bool connected);
+    void setRawCountsActive(bool active);
 
 private:
     QWidget *buildScrollingTab();
@@ -37,6 +38,7 @@ private:
 
     ScrollEngineSettings current_;
     bool deviceConnected_ = false;
+    bool rawCounts_ = false;
 
     QSlider *speedSlider_ = nullptr;
     QLabel *speedValue_ = nullptr;

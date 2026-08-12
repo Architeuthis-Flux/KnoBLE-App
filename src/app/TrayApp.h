@@ -29,6 +29,7 @@ public:
 private slots:
     void onDevicePresence(bool present);
     void onPermissionMissing();
+    void onRawCounts(bool active);
 
 private:
     void startEngine();
@@ -42,6 +43,8 @@ private:
     std::unique_ptr<ScrollEngine> engine_;
     SettingsWindow *settingsWindow_ = nullptr;
     bool deviceConnected_ = false;
+    bool rawCounts_ = false;
+    void refreshStatusLine();
 
 #ifdef Q_OS_MACOS
     std::unique_ptr<MacTray> tray_;

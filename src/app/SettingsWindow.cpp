@@ -191,6 +191,11 @@ void SettingsWindow::setDeviceConnected(bool connected) {
     refreshReport();
 }
 
+void SettingsWindow::setRawCountsActive(bool active) {
+    rawCounts_ = active;
+    refreshReport();
+}
+
 void SettingsWindow::emitChanged() {
     current_.pxPerCount = speedSlider_->value();
     current_.responseMs = responseSlider_->value();
@@ -215,6 +220,11 @@ QString SettingsWindow::buildReport() const {
     report += QStringLiteral("Invert:           %1\n").arg(current_.invert ? "yes" : "no");
     report += QStringLiteral("Gesture phases:   %1\n").arg(current_.reportPhases ? "yes" : "no");
     report += QStringLiteral("Smooth scrolling: %1\n").arg(current_.enabled ? "on" : "off");
+    report += QStringLiteral("Count source:     %1\n")
+                  .arg(rawCounts_
+                           ? QStringLiteral("raw HID (exact, acceleration-free)")
+                           : QStringLiteral("intercepted events (OS curve!) — grant Input "
+                                            "Monitoring"));
     report += QStringLiteral("\n-- Firmware (as flashed, compile-time) --\n");
     report += QStringLiteral("Haptic detents:   %1 /rev\n").arg(FirmwareDefaults::detentsPerRev);
     report += QStringLiteral("Wheel counts:     %1 /rev at x1\n").arg(FirmwareDefaults::linesPerRev);

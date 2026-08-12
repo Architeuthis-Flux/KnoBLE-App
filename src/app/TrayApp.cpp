@@ -42,6 +42,10 @@ TrayApp::TrayApp() {
         engine_->permissionMissing = [this] {
             QMetaObject::invokeMethod(this, "onPermissionMissing", Qt::QueuedConnection);
         };
+        engine_->rawCountsActive = [this](bool active) {
+            QMetaObject::invokeMethod(this, "onRawCounts", Qt::QueuedConnection,
+                                      Q_ARG(bool, active));
+        };
     }
 
 #ifdef Q_OS_MACOS
@@ -118,6 +122,7 @@ void TrayApp::openSettings() {
         };
     }
     settingsWindow_->setDeviceConnected(deviceConnected_);
+    settingsWindow_->setRawCountsActive(rawCounts_);
     settingsWindow_->show();
     settingsWindow_->raise();
     settingsWindow_->activateWindow();
@@ -128,12 +133,28 @@ void TrayApp::onDevicePresence(bool present) {
     if (settingsWindow_) {
         settingsWindow_->setDeviceConnected(present);
     }
-    showStatus(present ? tr("Knob: connected") : tr("Knob: not connected"));
+    refreshStatusLine();
 #ifdef Q_OS_MACOS
     tray_->setConnected(present);
 #else
     tray_.setIcon(makeIcon(present));
 #endif
+}
+
+void TrayApp::onRawCounts(bool active) {
+    rawCounts_ = active;
+    if (settingsWindow_) {
+        settingsWindow_->setRawCountsActive(active);
+    }
+    refreshStatusLine();
+}
+
+void TrayApp::refreshStatusLine() {
+    QString status = deviceConnected_ ? tr("Knob: connected") : tr("Knob: not connected");
+    if (!rawCounts_) {
+        status += tr(" — grant Input Monitoring for exact counts");
+    }
+    showStatus(status);
 }
 
 void TrayApp::onPermissionMissing() {

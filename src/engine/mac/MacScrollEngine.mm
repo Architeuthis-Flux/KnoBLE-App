@@ -13,6 +13,7 @@
 #include <ApplicationServices/ApplicationServices.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/hid/IOHIDManager.h>
+#include <IOKit/hid/IOHIDUsageTables.h>
 
 #include <atomic>
 #include <mutex>
@@ -76,6 +77,12 @@ struct MacScrollEngine::Impl {
 
     std::function<void(bool)> *deviceConnectedCb = nullptr;
     std::function<void()> *permissionMissingCb = nullptr;
+    std::function<void(bool)> *rawCountsActiveCb = nullptr;
+
+    // True when IOHIDManagerOpen succeeded (Input Monitoring granted): wheel
+    // counts come from the device's own HID values, pre-acceleration. False:
+    // fall back to tapped-event values, which carry the OS curve.
+    std::atomic<bool> rawCounts{false};
 
     // ---------------- device identification ----------------
 
@@ -193,6 +200,22 @@ struct MacScrollEngine::Impl {
         CFRelease(event);
     }
 
+    // Common input path for both sources; engine-thread only.
+    void feedCounts(int counts) {
+        if (counts == 0 || !enabled.load(std::memory_order_relaxed)) {
+            return;
+        }
+        if (invert.load(std::memory_order_relaxed)) {
+            counts = -counts;
+        }
+        const double now = nowSeconds();
+        if (!model.active()) {
+            lastTickSec = now;
+        }
+        model.feed(counts, now);
+        armTimer();
+    }
+
     void tick() {
         if (!model.active()) {
             idleTimer();
@@ -260,23 +283,24 @@ struct MacScrollEngine::Impl {
             return event; // not the knob: never touch other devices
         }
 
+        lastFlags = CGEventGetFlags(event);
+
+        if (rawCounts.load(std::memory_order_relaxed)) {
+            // Counts arrive via the HID value callback (pre-acceleration);
+            // here we only suppress the OS-cooked duplicate.
+            return nullptr;
+        }
+
+        // Fallback (no Input Monitoring): use the tapped value. macOS has
+        // already applied its acceleration curve to this field — smoothing
+        // still works but pacing follows the OS curve.
         int64_t counts = CGEventGetIntegerValueField(event, kCGScrollWheelEventDeltaAxis1);
         if (counts == 0) {
             // No vertical action (e.g. a future horizontal-wheel profile):
             // pass through untouched, we only own the vertical axis.
             return event;
         }
-        if (invert.load(std::memory_order_relaxed)) {
-            counts = -counts;
-        }
-
-        lastFlags = CGEventGetFlags(event);
-        const double now = nowSeconds();
-        if (!model.active()) {
-            lastTickSec = now;
-        }
-        model.feed((int)counts, now);
-        armTimer();
+        feedCounts((int)counts);
 
         return nullptr; // swallow the discrete event; the timer re-emits it
     }
@@ -322,9 +346,42 @@ struct MacScrollEngine::Impl {
             },
             this);
         IOHIDManagerScheduleWithRunLoop(hidManager, runLoop, kCFRunLoopDefaultMode);
-        // No IOHIDManagerOpen: enumeration and arrival callbacks don't need
-        // it, and opening input devices would trigger the Input Monitoring
-        // TCC prompt we don't require for v0.1.
+
+        // Raw wheel values, straight from the device: immune to the OS
+        // acceleration curve, which is baked into tapped CGEvent deltas
+        // before we ever see them (LinearMouse's only magnitude-preserving
+        // linear path does the same via raw input reports). Only the wheel
+        // element is matched; parsed values, no report-layout guessing.
+        NSDictionary *wheelMatch = @{
+            @(kIOHIDElementUsagePageKey): @(kHIDPage_GenericDesktop),
+            @(kIOHIDElementUsageKey): @(kHIDUsage_GD_Wheel),
+        };
+        IOHIDManagerSetInputValueMatching(hidManager, (__bridge CFDictionaryRef)wheelMatch);
+        IOHIDManagerRegisterInputValueCallback(
+            hidManager,
+            [](void *ctx, IOReturn, void *, IOHIDValueRef value) {
+                auto *self = static_cast<Impl *>(ctx);
+                if (!self->rawCounts.load(std::memory_order_relaxed)) {
+                    return; // fallback mode: the tap feeds instead
+                }
+                self->feedCounts((int)IOHIDValueGetIntegerValue(value));
+            },
+            this);
+
+        tryOpenForRawCounts();
+    }
+
+    // Opening the manager (Input Monitoring TCC) upgrades us from tapped
+    // values to raw device counts. Retryable after the user grants.
+    void tryOpenForRawCounts() {
+        if (!hidManager || rawCounts.load(std::memory_order_relaxed)) {
+            return;
+        }
+        const bool ok = IOHIDManagerOpen(hidManager, kIOHIDOptionsTypeNone) == kIOReturnSuccess;
+        rawCounts.store(ok, std::memory_order_relaxed);
+        if (rawCountsActiveCb && *rawCountsActiveCb) {
+            (*rawCountsActiveCb)(ok);
+        }
     }
 
     void onDevicesChanged() {
@@ -390,6 +447,9 @@ struct MacScrollEngine::Impl {
 
             // teardown on this thread after CFRunLoopStop()
             if (hidManager) {
+                if (rawCounts.load(std::memory_order_relaxed)) {
+                    IOHIDManagerClose(hidManager, kIOHIDOptionsTypeNone);
+                }
                 IOHIDManagerUnscheduleFromRunLoop(hidManager, runLoop, kCFRunLoopDefaultMode);
                 CFRelease(hidManager);
                 hidManager = nullptr;
@@ -432,6 +492,7 @@ MacScrollEngine::MacScrollEngine(std::vector<DeviceFilter> devices)
     impl_->filters = std::move(devices);
     impl_->deviceConnectedCb = &deviceConnected;
     impl_->permissionMissingCb = &permissionMissing;
+    impl_->rawCountsActiveCb = &rawCountsActive;
 }
 
 MacScrollEngine::~MacScrollEngine() {
@@ -450,7 +511,17 @@ bool MacScrollEngine::start() {
     }
 
     if (impl_->running.load()) {
-        return true; // already running
+        // Already running; the user may have just granted Input Monitoring —
+        // retry the raw-counts upgrade on the engine thread.
+        if (impl_->runLoop) {
+            CFRunLoopRef rl = impl_->runLoop;
+            Impl *impl = impl_.get();
+            CFRunLoopPerformBlock(rl, kCFRunLoopDefaultMode, ^{
+                impl->tryOpenForRawCounts();
+            });
+            CFRunLoopWakeUp(rl);
+        }
+        return true;
     }
     if (impl_->thread.joinable()) {
         impl_->thread.join(); // reap a thread left over from a failed start

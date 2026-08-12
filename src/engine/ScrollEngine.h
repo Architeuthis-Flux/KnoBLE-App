@@ -37,4 +37,8 @@ public:
     std::function<void(bool)> deviceConnected;
     // permissionMissing() fires when the OS blocks interception.
     std::function<void()> permissionMissing;
+    // rawCountsActive(bool): true when wheel counts come straight from the
+    // device's HID reports (exact, immune to OS acceleration); false when
+    // falling back to intercepted-event values (OS curve applies).
+    std::function<void(bool)> rawCountsActive;
 };
