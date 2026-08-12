@@ -32,6 +32,7 @@ public:
 
 signals:
     void presentChanged(bool present);
+    void infoLoaded(int protoVersion, int keySlots, int flags); // flags bit0: fixed speed slider
     void keyLoaded(int slot, uint32_t encoded);
     void committed(bool ok);
     void potConfigLoaded(int role, int speedMax, int speedMinDiv, int steps);

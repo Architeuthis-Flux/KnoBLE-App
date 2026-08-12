@@ -98,6 +98,7 @@ SettingsWindow::SettingsWindow(ScrollEngineSettings initial, KnobHidChannel *cha
                 &SettingsWindow::onChannelPresent);
         connect(channel_, &KnobHidChannel::keyLoaded, this, &SettingsWindow::onKeyLoaded);
         connect(channel_, &KnobHidChannel::committed, this, &SettingsWindow::onCommitted);
+        connect(channel_, &KnobHidChannel::infoLoaded, this, &SettingsWindow::onInfoLoaded);
         connect(channel_, &KnobHidChannel::potConfigLoaded, this,
                 &SettingsWindow::onPotConfigLoaded);
         connect(channel_, &KnobHidChannel::potValue, this, &SettingsWindow::onPotValue);
@@ -242,15 +243,33 @@ QWidget *SettingsWindow::buildKeysTab() {
 
     // ---- Slide pot: role + per-role sensitivity + live value ----
     potBox_ = new QGroupBox(tr("Slide pot"));
-    auto *potForm = new QFormLayout(potBox_);
+    potForm_ = new QFormLayout(potBox_);
+    auto *potForm = potForm_;
     potForm->setHorizontalSpacing(14);
 
+    // Dual-pot hardware only (revealed by GET_INFO): the dedicated speed
+    // slider's range, tuned here while the assignable pot does other work.
+    speedRangeSlider_ = new QSlider(Qt::Horizontal);
+    speedRangeSlider_->setRange(2, 8);
+    speedRangeSlider_->setValue(potSpeedMax_);
+    speedRangeValue_ = new QLabel;
+    speedRangeValue_->setMinimumWidth(80);
+    auto *speedRangeRow = new QHBoxLayout;
+    speedRangeRow->addWidget(speedRangeSlider_, 1);
+    speedRangeRow->addWidget(speedRangeValue_);
+    speedRangeRow_ = potForm->rowCount();
+    potForm->addRow(tr("Speed range"), speedRangeRow);
+
     potRoleCombo_ = new QComboBox;
-    potRoleCombo_->addItem(tr("Scroll speed (÷ … ×)"), 0);
-    potRoleCombo_->addItem(tr("Horizontal scroll"), 1);
-    potRoleCombo_->addItem(tr("Volume"), 2);
-    potRoleCombo_->addItem(tr("Off"), 3);
+    populatePotRoles();
     potForm->addRow(tr("Function"), potRoleCombo_);
+
+    connect(speedRangeSlider_, &QSlider::valueChanged, this, [this](int v) {
+        potSpeedMax_ = v;
+        potSpeedMinDiv_ = v + 1;
+        speedRangeValue_->setText(tr("÷%1 … ×%2").arg(v + 1).arg(v));
+        sendPotConfig();
+    });
 
     potSensSlider_ = new QSlider(Qt::Horizontal);
     potSensValue_ = new QLabel;
@@ -269,6 +288,8 @@ QWidget *SettingsWindow::buildKeysTab() {
     valueRow->addWidget(potBar_, 1);
     valueRow->addWidget(potValueLabel_);
     potForm->addRow(tr("Position"), valueRow);
+
+    potForm->setRowVisible(speedRangeRow_, false); // shown when GET_INFO says dual-pot
 
     auto *potNote = new QLabel(tr("Each function keeps its own sensitivity — switching "
                                   "functions never resets the other's setting."));
@@ -393,6 +414,36 @@ void SettingsWindow::onChannelPresent(bool present) {
     refreshReport();
 }
 
+void SettingsWindow::populatePotRoles() {
+    const QSignalBlocker block(potRoleCombo_);
+    potRoleCombo_->clear();
+    if (!hasFixedSpeed_) {
+        potRoleCombo_->addItem(tr("Scroll speed (÷ … ×)"), 0);
+    }
+    potRoleCombo_->addItem(tr("Horizontal scroll"), 1);
+    potRoleCombo_->addItem(tr("Volume"), 2);
+    potRoleCombo_->addItem(tr("Off"), 3);
+}
+
+void SettingsWindow::onInfoLoaded(int protoVersion, int keySlots, int flags) {
+    Q_UNUSED(protoVersion);
+    Q_UNUSED(keySlots);
+    const bool fixedSpeed = flags & 0x01;
+    if (fixedSpeed == hasFixedSpeed_) {
+        return;
+    }
+    hasFixedSpeed_ = fixedSpeed;
+    populatePotRoles();
+    if (potForm_ && speedRangeRow_ >= 0) {
+        potForm_->setRowVisible(speedRangeRow_, hasFixedSpeed_);
+    }
+    if (hasFixedSpeed_ && potBox_) {
+        potBox_->setTitle(tr("Sliders — speed (fixed) + assignable pot"));
+    }
+    updatePotSensUi();
+    refreshReport();
+}
+
 void SettingsWindow::onPotConfigLoaded(int role, int speedMax, int speedMinDiv, int steps) {
     potRole_ = role;
     potSpeedMax_ = speedMax;
@@ -400,10 +451,18 @@ void SettingsWindow::onPotConfigLoaded(int role, int speedMax, int speedMinDiv, 
     potSteps_ = steps;
     {
         const QSignalBlocker blockCombo(potRoleCombo_);
-        const int idx = potRoleCombo_->findData(role);
+        // Dual-pot: a stored "speed" role is inert (the fixed slider owns
+        // speed) — show it as Off rather than an unlisted entry.
+        const int displayRole = (hasFixedSpeed_ && role == 0) ? 3 : role;
+        const int idx = potRoleCombo_->findData(displayRole);
         if (idx >= 0) {
             potRoleCombo_->setCurrentIndex(idx);
         }
+    }
+    if (speedRangeSlider_) {
+        const QSignalBlocker blockRange(speedRangeSlider_);
+        speedRangeSlider_->setValue(qBound(2, potSpeedMax_, 8));
+        speedRangeValue_->setText(tr("÷%1 … ×%2").arg(potSpeedMinDiv_).arg(potSpeedMax_));
     }
     updatePotSensUi();
     refreshReport();
@@ -449,7 +508,11 @@ void SettingsWindow::updatePotSensUi() {
         return;
     }
     const QSignalBlocker block(potSensSlider_);
-    if (potRole_ == 0) {
+    if (hasFixedSpeed_ && potRole_ == 0) {
+        // stored speed role is inert on dual-pot hardware: nothing to tune
+        potSensValue_->setText(tr("—"));
+        potSensSlider_->setEnabled(false);
+    } else if (potRole_ == 0) {
         potSensSlider_->setRange(2, 8);
         potSensSlider_->setValue(qBound(2, potSpeedMax_, 8));
         potSensValue_->setText(tr("÷%1 … ×%2").arg(potSpeedMax_ + 1).arg(potSpeedMax_));
@@ -555,6 +618,11 @@ QString SettingsWindow::buildReport() const {
     }
     static const char *potRoles[] = {"scroll speed", "horizontal scroll", "volume", "off"};
     report += QStringLiteral("\n-- Slide pot --\n");
+    if (hasFixedSpeed_) {
+        report += QStringLiteral("Speed slider:     fixed hardware (029/AIN5), range /%1 ... x%2\n")
+                      .arg(potSpeedMinDiv_)
+                      .arg(potSpeedMax_);
+    }
     report += QStringLiteral("Function:         %1\n")
                   .arg(QString::fromUtf8(potRoles[qBound(0, potRole_, 3)]));
     if (potRole_ == 0) {

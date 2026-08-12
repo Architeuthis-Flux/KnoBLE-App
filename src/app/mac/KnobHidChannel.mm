@@ -64,6 +64,11 @@ struct KnobHidChannel::Impl {
         const uint8_t cmd = frame[0];
         const uint8_t status = frame[2];
         switch (cmd) {
+        case CmdGetInfo:
+            if (status == 0) {
+                emit owner->infoLoaded(frame[3], frame[4], frame[5]);
+            }
+            break;
         case CmdGetKey:
             if (status == 0) {
                 const int slot = frame[3];
@@ -149,6 +154,7 @@ bool KnobHidChannel::channelPresent() const {
 }
 
 void KnobHidChannel::requestKeys() {
+    impl_->send(CmdGetInfo, nullptr, 0);
     for (uint8_t slot = 0; slot < kKeySlots; slot++) {
         const uint8_t payload[1] = {slot};
         impl_->send(CmdGetKey, payload, sizeof(payload));

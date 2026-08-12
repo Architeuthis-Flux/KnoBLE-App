@@ -35,6 +35,7 @@ public slots:
 
 private slots:
     void onChannelPresent(bool present);
+    void onInfoLoaded(int protoVersion, int keySlots, int flags);
     void onKeyLoaded(int slot, uint32_t encoded);
     void onCommitted(bool ok);
     void onPotConfigLoaded(int role, int speedMax, int speedMinDiv, int steps);
@@ -73,6 +74,12 @@ private:
 
     void sendPotConfig();
     void updatePotSensUi();
+    void populatePotRoles();
+    bool hasFixedSpeed_ = false;
+    QSlider *speedRangeSlider_ = nullptr;
+    QLabel *speedRangeValue_ = nullptr;
+    int speedRangeRow_ = -1;
+    class QFormLayout *potForm_ = nullptr;
     QGroupBox *potBox_ = nullptr;
     QComboBox *potRoleCombo_ = nullptr;
     QSlider *potSensSlider_ = nullptr;
