@@ -37,6 +37,8 @@ private slots:
     void onChannelPresent(bool present);
     void onKeyLoaded(int slot, uint32_t encoded);
     void onCommitted(bool ok);
+    void onPotConfigLoaded(int role, int speedMax, int speedMinDiv, int steps);
+    void onPotValue(int raw, int role, int semantic);
 
 private:
     QWidget *buildScrollingTab();
@@ -68,6 +70,22 @@ private:
     QLabel *keysHint_ = nullptr;
     QPushButton *saveButton_ = nullptr;
     QLabel *keysStatus_ = nullptr;
+
+    void sendPotConfig();
+    void updatePotSensUi();
+    QGroupBox *potBox_ = nullptr;
+    QComboBox *potRoleCombo_ = nullptr;
+    QSlider *potSensSlider_ = nullptr;
+    QLabel *potSensValue_ = nullptr;
+    class QProgressBar *potBar_ = nullptr;
+    QLabel *potValueLabel_ = nullptr;
+    class QTimer *potTimer_ = nullptr;
+    int potRole_ = 0;
+    int potSpeedMax_ = 4;
+    int potSpeedMinDiv_ = 5;
+    int potSteps_ = 32;
+    int potLastSemantic_ = 0;
+    int potLastRaw_ = -1;
     QLabel *connectionLabel_ = nullptr;
     QPlainTextEdit *reportView_ = nullptr;
 };

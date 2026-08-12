@@ -18,10 +18,12 @@
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QScrollArea>
 #include <QSlider>
 #include <QStyle>
 #include <QTabWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace {
@@ -86,7 +88,7 @@ SettingsWindow::SettingsWindow(ScrollEngineSettings initial, KnobHidChannel *cha
 
     auto *tabs = new QTabWidget;
     tabs->addTab(buildScrollingTab(), tr("Scrolling"));
-    tabs->addTab(buildKeysTab(), tr("Keys"));
+    tabs->addTab(buildKeysTab(), tr("Controls"));
     tabs->addTab(buildDeviceTab(), tr("Device"));
     layout->addWidget(tabs);
 
@@ -96,6 +98,16 @@ SettingsWindow::SettingsWindow(ScrollEngineSettings initial, KnobHidChannel *cha
                 &SettingsWindow::onChannelPresent);
         connect(channel_, &KnobHidChannel::keyLoaded, this, &SettingsWindow::onKeyLoaded);
         connect(channel_, &KnobHidChannel::committed, this, &SettingsWindow::onCommitted);
+        connect(channel_, &KnobHidChannel::potConfigLoaded, this,
+                &SettingsWindow::onPotConfigLoaded);
+        connect(channel_, &KnobHidChannel::potValue, this, &SettingsWindow::onPotValue);
+        potTimer_ = new QTimer(this);
+        potTimer_->setInterval(400);
+        connect(potTimer_, &QTimer::timeout, this, [this] {
+            if (channel_ && channel_->channelPresent()) {
+                channel_->requestPotValue();
+            }
+        });
         onChannelPresent(channel_->channelPresent());
     }
 #endif
@@ -217,14 +229,71 @@ QWidget *SettingsWindow::buildKeysTab() {
     }
 
     auto *note = new QLabel(tr("Changes apply immediately for testing. “Save to knob” makes "
-                               "them permanent (they persist across power-off). The middle "
-                               "key’s hold-for-volume-layer is unaffected — you’re remapping "
-                               "its tap."));
+                               "them permanent (they persist across power-off). Modifiers "
+                               "(⌘⇧⌃⌥) act while the key is held — great with the knob for "
+                               "zoom or pan on the left/right keys. The middle key’s "
+                               "hold-for-volume-layer is unaffected — you’re remapping its "
+                               "tap, so modifiers aren’t useful there."));
     note->setWordWrap(true);
     note->setObjectName("secondary");
     form->addRow(QString(), note);
 
     layout->addWidget(keysBox_);
+
+    // ---- Slide pot: role + per-role sensitivity + live value ----
+    potBox_ = new QGroupBox(tr("Slide pot"));
+    auto *potForm = new QFormLayout(potBox_);
+    potForm->setHorizontalSpacing(14);
+
+    potRoleCombo_ = new QComboBox;
+    potRoleCombo_->addItem(tr("Scroll speed (÷ … ×)"), 0);
+    potRoleCombo_->addItem(tr("Horizontal scroll"), 1);
+    potRoleCombo_->addItem(tr("Volume"), 2);
+    potRoleCombo_->addItem(tr("Off"), 3);
+    potForm->addRow(tr("Function"), potRoleCombo_);
+
+    potSensSlider_ = new QSlider(Qt::Horizontal);
+    potSensValue_ = new QLabel;
+    potSensValue_->setMinimumWidth(80);
+    auto *sensRow = new QHBoxLayout;
+    sensRow->addWidget(potSensSlider_, 1);
+    sensRow->addWidget(potSensValue_);
+    potForm->addRow(tr("Sensitivity"), sensRow);
+
+    potBar_ = new QProgressBar;
+    potBar_->setRange(0, 3750); // SAADC full scale for the pot rail
+    potBar_->setTextVisible(false);
+    potBar_->setFixedHeight(8);
+    potValueLabel_ = new QLabel(tr("—"));
+    auto *valueRow = new QHBoxLayout;
+    valueRow->addWidget(potBar_, 1);
+    valueRow->addWidget(potValueLabel_);
+    potForm->addRow(tr("Position"), valueRow);
+
+    auto *potNote = new QLabel(tr("Each function keeps its own sensitivity — switching "
+                                  "functions never resets the other's setting."));
+    potNote->setWordWrap(true);
+    potNote->setObjectName("secondary");
+    potForm->addRow(QString(), potNote);
+
+    layout->addWidget(potBox_);
+
+    connect(potRoleCombo_, &QComboBox::activated, this, [this] {
+        potRole_ = potRoleCombo_->currentData().toInt();
+        updatePotSensUi();
+        sendPotConfig();
+    });
+    connect(potSensSlider_, &QSlider::valueChanged, this, [this](int v) {
+        if (potRole_ == 0) {
+            potSpeedMax_ = v;
+            potSpeedMinDiv_ = v + 1;
+        } else {
+            potSteps_ = v;
+        }
+        updatePotSensUi();
+        sendPotConfig();
+    });
+    updatePotSensUi();
 
     auto *buttonRow = new QHBoxLayout;
     keysStatus_ = new QLabel;
@@ -289,23 +358,111 @@ void SettingsWindow::onChannelPresent(bool present) {
         return;
     }
     keysBox_->setEnabled(present);
+    if (potBox_) {
+        potBox_->setEnabled(present);
+    }
     if (saveButton_) {
         saveButton_->setEnabled(present);
     }
     if (present) {
-        keysHint_->setText(tr("Connected over USB — key changes stage instantly."));
+        keysHint_->setText(tr("Connected over USB — changes stage instantly."));
         keysLoaded_ = false;
 #ifdef Q_OS_MACOS
         if (channel_) {
             channel_->requestKeys();
+            channel_->requestPotConfig();
+        }
+        if (potTimer_) {
+            potTimer_->start();
         }
 #endif
     } else {
-        keysHint_->setText(tr("🔌 Plug the knob in over USB to remap keys. (Scroll smoothing "
-                              "works over Bluetooth; the settings channel is USB for now.)"));
+        keysHint_->setText(tr("🔌 Plug the knob in over USB to remap keys and the pot. (Scroll "
+                              "smoothing works over Bluetooth; the settings channel is USB for "
+                              "now.)"));
+#ifdef Q_OS_MACOS
+        if (potTimer_) {
+            potTimer_->stop();
+        }
+#endif
+        if (potValueLabel_) {
+            potValueLabel_->setText(tr("—"));
+        }
     }
     refreshBanner();
     refreshReport();
+}
+
+void SettingsWindow::onPotConfigLoaded(int role, int speedMax, int speedMinDiv, int steps) {
+    potRole_ = role;
+    potSpeedMax_ = speedMax;
+    potSpeedMinDiv_ = speedMinDiv;
+    potSteps_ = steps;
+    {
+        const QSignalBlocker blockCombo(potRoleCombo_);
+        const int idx = potRoleCombo_->findData(role);
+        if (idx >= 0) {
+            potRoleCombo_->setCurrentIndex(idx);
+        }
+    }
+    updatePotSensUi();
+    refreshReport();
+}
+
+void SettingsWindow::onPotValue(int raw, int role, int semantic) {
+    potLastRaw_ = raw;
+    potLastSemantic_ = semantic;
+    if (potBar_) {
+        potBar_->setValue(qBound(0, raw, 3750));
+    }
+    if (potValueLabel_) {
+        QString text;
+        switch (role) {
+        case 0:
+            text = semantic >= 1 ? tr("×%1").arg(semantic) : tr("÷%1").arg(-semantic);
+            break;
+        case 1:
+        case 2:
+            text = tr("step %1/%2").arg(semantic).arg(potSteps_);
+            break;
+        default:
+            text = tr("%1%").arg(raw * 100 / 3750);
+            break;
+        }
+        potValueLabel_->setText(text);
+    }
+}
+
+void SettingsWindow::sendPotConfig() {
+#ifdef Q_OS_MACOS
+    if (channel_) {
+        channel_->setPotConfig((uint8_t)potRole_, (uint8_t)potSpeedMax_,
+                               (uint8_t)potSpeedMinDiv_, (uint8_t)potSteps_);
+        keysStatus_->setText(tr("Staged — try it, then Save to keep it."));
+    }
+#endif
+    refreshReport();
+}
+
+void SettingsWindow::updatePotSensUi() {
+    if (!potSensSlider_) {
+        return;
+    }
+    const QSignalBlocker block(potSensSlider_);
+    if (potRole_ == 0) {
+        potSensSlider_->setRange(2, 8);
+        potSensSlider_->setValue(qBound(2, potSpeedMax_, 8));
+        potSensValue_->setText(tr("÷%1 … ×%2").arg(potSpeedMax_ + 1).arg(potSpeedMax_));
+        potSensSlider_->setEnabled(true);
+    } else if (potRole_ == 1 || potRole_ == 2) {
+        potSensSlider_->setRange(4, 64);
+        potSensSlider_->setValue(qBound(4, potSteps_, 64));
+        potSensValue_->setText(tr("%1 steps").arg(potSteps_));
+        potSensSlider_->setEnabled(true);
+    } else {
+        potSensValue_->setText(tr("—"));
+        potSensSlider_->setEnabled(false);
+    }
 }
 
 void SettingsWindow::onKeyLoaded(int slot, uint32_t encoded) {
@@ -396,12 +553,25 @@ QString SettingsWindow::buildReport() const {
                       .arg(QString::fromUtf8(FirmwareDefaults::slotNames[i]), -17)
                       .arg(keycodeLabelFor(keyCodes_[i]));
     }
+    static const char *potRoles[] = {"scroll speed", "horizontal scroll", "volume", "off"};
+    report += QStringLiteral("\n-- Slide pot --\n");
+    report += QStringLiteral("Function:         %1\n")
+                  .arg(QString::fromUtf8(potRoles[qBound(0, potRole_, 3)]));
+    if (potRole_ == 0) {
+        report += QStringLiteral("Sensitivity:      /%1 ... x%2\n")
+                      .arg(potSpeedMinDiv_)
+                      .arg(potSpeedMax_);
+    } else if (potRole_ == 1 || potRole_ == 2) {
+        report += QStringLiteral("Sensitivity:      %1 steps\n").arg(potSteps_);
+    }
+    if (potLastRaw_ >= 0) {
+        report += QStringLiteral("Live position:    %1/3750 (semantic %2)\n")
+                      .arg(potLastRaw_)
+                      .arg(potLastSemantic_);
+    }
     report += QStringLiteral("\n-- Firmware (as flashed, compile-time) --\n");
     report += QStringLiteral("Haptic detents:   %1 /rev\n").arg(FirmwareDefaults::detentsPerRev);
     report += QStringLiteral("Wheel counts:     %1 /rev at x1\n").arg(FirmwareDefaults::linesPerRev);
-    report += QStringLiteral("Slide pot:        scroll speed, /%1 ... x%2\n")
-                  .arg(FirmwareDefaults::wheelScaleMinDiv)
-                  .arg(FirmwareDefaults::wheelScaleMax);
     return report;
 }
 

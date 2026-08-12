@@ -18,6 +18,9 @@ enum Cmd : uint8_t {
     CmdSetKey = 0x03,
     CmdCommit = 0x04,
     CmdReset = 0x05,
+    CmdGetPotCfg = 0x06,
+    CmdSetPotCfg = 0x07,
+    CmdGetPotValue = 0x08,
 };
 } // namespace
 
@@ -72,6 +75,18 @@ struct KnobHidChannel::Impl {
         case CmdCommit:
         case CmdReset:
             emit owner->committed(status == 0);
+            break;
+        case CmdGetPotCfg:
+            if (status == 0) {
+                emit owner->potConfigLoaded(frame[3], frame[4], frame[5], frame[6]);
+            }
+            break;
+        case CmdGetPotValue:
+            if (status == 0) {
+                const int raw = frame[3] | (frame[4] << 8);
+                const int semantic = (int16_t)(frame[6] | (frame[7] << 8));
+                emit owner->potValue(raw, frame[5], semantic);
+            }
             break;
         default:
             break;
@@ -157,4 +172,18 @@ void KnobHidChannel::commit() {
 
 void KnobHidChannel::resetDefaults() {
     impl_->send(CmdReset, nullptr, 0);
+}
+
+void KnobHidChannel::requestPotConfig() {
+    impl_->send(CmdGetPotCfg, nullptr, 0);
+}
+
+void KnobHidChannel::setPotConfig(uint8_t role, uint8_t speedMax, uint8_t speedMinDiv,
+                                  uint8_t steps) {
+    const uint8_t payload[4] = {role, speedMax, speedMinDiv, steps};
+    impl_->send(CmdSetPotCfg, payload, sizeof(payload));
+}
+
+void KnobHidChannel::requestPotValue() {
+    impl_->send(CmdGetPotValue, nullptr, 0);
 }

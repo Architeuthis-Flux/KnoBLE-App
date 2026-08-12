@@ -17,6 +17,13 @@ struct Keycode {
 
 inline const QVector<Keycode> &keycodeTable() {
     static const QVector<Keycode> table = {
+        // Modifiers (keyboard page 0x07): held while the key is held — the
+        // natural pairing with the knob (⌘+scroll = zoom, ⇧+scroll = pan).
+        {"Command ⌘ (Win key)", "Modifiers", 0x000700E3},
+        {"Shift ⇧", "Modifiers", 0x000700E1},
+        {"Control ⌃", "Modifiers", 0x000700E0},
+        {"Option ⌥ (Alt)", "Modifiers", 0x000700E2},
+
         // Media (consumer page 0x0C)
         {"Play / Pause", "Media", 0x000C00CD},
         {"Next Track", "Media", 0x000C00B5},
