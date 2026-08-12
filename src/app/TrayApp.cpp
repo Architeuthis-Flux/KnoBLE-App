@@ -2,6 +2,7 @@
 #include "app/SettingsWindow.h"
 
 #ifdef Q_OS_MACOS
+#include "app/mac/KnobHidChannel.h"
 #include "app/mac/MacTray.h"
 #include "engine/mac/MacScrollEngine.h"
 #else
@@ -30,6 +31,7 @@ TrayApp::TrayApp() {
 
 #ifdef Q_OS_MACOS
     engine_ = std::make_unique<MacScrollEngine>(knobDevices());
+    channel_ = std::make_unique<KnobHidChannel>();
 #endif
 
     if (engine_) {
@@ -107,7 +109,11 @@ void TrayApp::startEngine() {
 
 void TrayApp::openSettings() {
     if (!settingsWindow_) {
-        settingsWindow_ = new SettingsWindow(settings_);
+#ifdef Q_OS_MACOS
+        settingsWindow_ = new SettingsWindow(settings_, channel_.get());
+#else
+        settingsWindow_ = new SettingsWindow(settings_, nullptr);
+#endif
         settingsWindow_->setAttribute(Qt::WA_DeleteOnClose);
         connect(settingsWindow_, &QObject::destroyed, this,
                 [this] { settingsWindow_ = nullptr; });

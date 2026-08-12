@@ -8,6 +8,7 @@
 
 #ifdef Q_OS_MACOS
 class MacTray;
+class KnobHidChannel;
 #else
 #include <QSystemTrayIcon>
 class QAction;
@@ -48,6 +49,7 @@ private:
 
 #ifdef Q_OS_MACOS
     std::unique_ptr<MacTray> tray_;
+    std::unique_ptr<KnobHidChannel> channel_;
 #else
     void buildMenu();
     QIcon makeIcon(bool connected) const;

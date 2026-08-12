@@ -3,19 +3,28 @@
 Cross-platform companion app for [BaselineDesign KNOB](https://github.com/BaselineDesign/BaselineDesign-Knob)
 devices. Two jobs:
 
-1. **Rock-solid scrolling** — intercepts the knob's discrete mouse-wheel
-   events and re-emits them as smooth, strictly-linear continuous scrolling.
-   No OS acceleration, no inertia beyond the knob's own flywheel, no more
-   multi-line hops at slow speeds. Replaces the LinearMouse setup for the
-   knob (and only the knob — other mice are untouched).
-2. **Configuring the knob** *(planned, v0.2)* — runtime controls for detent
-   count, speed range, and haptic strength over a raw-HID settings channel,
-   recovering what VIA offered on the wired KNOBs.
+1. **Rock-solid scrolling** — reads the knob's rotation as raw HID counts
+   (before the OS can apply any acceleration curve) and re-emits it as
+   smooth, strictly-linear continuous scrolling. No OS acceleration, no
+   inertia beyond the knob's own flywheel. Only the knob is affected —
+   other mice are untouched.
+2. **Configuring the knob** — remap the keys from the Keys tab over a
+   raw-HID settings channel (QMK-style, USB), with changes staged live and
+   saved to the knob's flash. Detents/haptics/pot dials come next.
 
-Status: **v0.1, macOS backend**. Windows backend planned (low-level mouse
-hook + SendInput). Linux intentionally has no backend — flash the
-`knoble_hires` firmware instead: libinput honors the HID Resolution
-Multiplier natively, zero host software needed.
+Status: **v0.2, macOS**. Windows backend planned (low-level mouse hook +
+SendInput; the settings channel is plain hidapi and ports directly). Linux
+intentionally has no scroll backend — flash the `knoble_hires` firmware
+instead: libinput honors the HID Resolution Multiplier natively, zero host
+software needed.
+
+## Setup per platform
+
+| Platform | Scrolling | Key remap |
+|---|---|---|
+| macOS | this app (grant Accessibility + Input Monitoring on first run — the app walks you through it) | this app, knob plugged in over USB |
+| Windows | *(planned)* native is usable meanwhile | *(planned — same protocol via hidapi)* |
+| Linux | no app needed: flash `knoble_hires` firmware | *(planned)* |
 
 ## How the smoothing works
 

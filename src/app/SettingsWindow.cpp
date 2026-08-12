@@ -1,7 +1,13 @@
 #include "app/SettingsWindow.h"
+#include "app/Keycodes.h"
+
+#ifdef Q_OS_MACOS
+#include "app/mac/KnobHidChannel.h"
+#endif
 
 #include <QCheckBox>
 #include <QClipboard>
+#include <QComboBox>
 #include <QDir>
 #include <QFile>
 #include <QFormLayout>
@@ -14,26 +20,25 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSlider>
+#include <QStyle>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
 namespace {
 
-// Firmware values as flashed in the current KnoBLE build (compile-time
-// devicetree). Shown read-only until the raw-HID settings channel (v0.2)
-// makes them live. Keep in sync with KnoBLE boards/shields/knoble.
+// Firmware values as flashed (compile-time devicetree), shown in the report.
+// Keys are live via the raw-HID channel; the rest goes live in a later rev.
 struct FirmwareDefaults {
     static constexpr int detentsPerRev = 16;
     static constexpr int linesPerRev = 240;
-    static constexpr int wheelScaleMax = 4;   // pot top: ×4
-    static constexpr int wheelScaleMinDiv = 5; // pot bottom: ÷5
-    static constexpr int sliderCurvePower = 1; // linear pot travel
-    static constexpr const char *keys = "prev-track / play-pause (hold: layer 1) / next-track";
-    static constexpr const char *layer1 = "knob: volume (48 detents), left key: USB↔BLE";
+    static constexpr int wheelScaleMax = 4;
+    static constexpr int wheelScaleMinDiv = 5;
+    static constexpr const char *slotNames[3] = {"Left key", "Middle key (tap)", "Right key"};
 };
 
+constexpr uint32_t kDefaultCodes[3] = {0x000C00B6, 0x000C00CD, 0x000C00B5};
+
 // Ruler-striped canvas for judging scroll feel: hover it and turn the knob.
-// Bands + numbered ticks make hops, stalls, and drift easy to see.
 class TesterCanvas : public QWidget {
 public:
     explicit TesterCanvas(QWidget *parent = nullptr) : QWidget(parent) {
@@ -63,18 +68,40 @@ protected:
 
 } // namespace
 
-SettingsWindow::SettingsWindow(ScrollEngineSettings initial, QWidget *parent)
-    : QWidget(parent), current_(initial) {
-    setWindowTitle(tr("Knob Settings"));
-    setMinimumSize(420, 520);
+SettingsWindow::SettingsWindow(ScrollEngineSettings initial, KnobHidChannel *channel,
+                               QWidget *parent)
+    : QWidget(parent), current_(initial), channel_(channel) {
+    setWindowTitle(tr("Knob"));
+    setMinimumSize(460, 560);
+    memcpy(keyCodes_, kDefaultCodes, sizeof(keyCodes_));
 
     auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(16, 12, 16, 12);
+    layout->setSpacing(10);
+
+    banner_ = new QLabel;
+    banner_->setWordWrap(true);
+    banner_->setObjectName("banner");
+    layout->addWidget(banner_);
+
     auto *tabs = new QTabWidget;
     tabs->addTab(buildScrollingTab(), tr("Scrolling"));
+    tabs->addTab(buildKeysTab(), tr("Keys"));
     tabs->addTab(buildDeviceTab(), tr("Device"));
     layout->addWidget(tabs);
 
+#ifdef Q_OS_MACOS
+    if (channel_) {
+        connect(channel_, &KnobHidChannel::presentChanged, this,
+                &SettingsWindow::onChannelPresent);
+        connect(channel_, &KnobHidChannel::keyLoaded, this, &SettingsWindow::onKeyLoaded);
+        connect(channel_, &KnobHidChannel::committed, this, &SettingsWindow::onCommitted);
+        onChannelPresent(channel_->channelPresent());
+    }
+#endif
+
     checkLinearMouseConflict();
+    refreshBanner();
     refreshReport();
 }
 
@@ -82,25 +109,24 @@ QWidget *SettingsWindow::buildScrollingTab() {
     auto *tab = new QWidget;
     auto *layout = new QVBoxLayout(tab);
     auto *form = new QFormLayout;
+    form->setHorizontalSpacing(14);
 
-    // Speed: pixels of scroll per wheel count, in 0.5 px steps (slider ticks
-    // are half-pixels). With 240 counts/rev the sweet spot is small — a few
-    // px per count — so fine steps down low matter more than a big ceiling.
+    // Speed in half-pixel steps: with 240 counts/rev the sweet spot is low.
     speedSlider_ = new QSlider(Qt::Horizontal);
     speedSlider_->setRange(1, 60); // 0.5 .. 30.0 px/count
     speedSlider_->setValue((int)qRound(current_.pxPerCount * 2.0));
     speedValue_ = new QLabel;
+    speedValue_->setMinimumWidth(56);
     auto *speedRow = new QHBoxLayout;
     speedRow->addWidget(speedSlider_, 1);
     speedRow->addWidget(speedValue_);
     form->addRow(tr("Speed"), speedRow);
 
-    // Response: catch-up time constant. Lower = page glued tighter to the
-    // knob; higher = softer glide.
     responseSlider_ = new QSlider(Qt::Horizontal);
     responseSlider_->setRange(20, 200);
     responseSlider_->setValue((int)current_.responseMs);
     responseValue_ = new QLabel;
+    responseValue_->setMinimumWidth(56);
     auto *responseRow = new QHBoxLayout;
     responseRow->addWidget(responseSlider_, 1);
     responseRow->addWidget(responseValue_);
@@ -118,7 +144,7 @@ QWidget *SettingsWindow::buildScrollingTab() {
 
     conflictLabel_ = new QLabel;
     conflictLabel_->setWordWrap(true);
-    conflictLabel_->setStyleSheet("color: #b45309;");
+    conflictLabel_->setObjectName("warning");
     conflictLabel_->hide();
     layout->addWidget(conflictLabel_);
 
@@ -151,22 +177,93 @@ QWidget *SettingsWindow::buildScrollingTab() {
     return tab;
 }
 
+QWidget *SettingsWindow::buildKeysTab() {
+    auto *tab = new QWidget;
+    auto *layout = new QVBoxLayout(tab);
+
+    keysHint_ = new QLabel;
+    keysHint_->setWordWrap(true);
+    layout->addWidget(keysHint_);
+
+    keysBox_ = new QGroupBox(tr("Key assignments"));
+    auto *form = new QFormLayout(keysBox_);
+    form->setHorizontalSpacing(14);
+
+    for (int slot = 0; slot < 3; slot++) {
+        keyCombo_[slot] = new QComboBox;
+        QString lastCategory;
+        for (const auto &kc : keycodeTable()) {
+            if (lastCategory != kc.category) {
+                if (!lastCategory.isEmpty()) {
+                    keyCombo_[slot]->insertSeparator(keyCombo_[slot]->count());
+                }
+                lastCategory = kc.category;
+            }
+            keyCombo_[slot]->addItem(QString::fromUtf8(kc.label), QVariant::fromValue(kc.encoded));
+        }
+        form->addRow(tr(FirmwareDefaults::slotNames[slot]), keyCombo_[slot]);
+
+        connect(keyCombo_[slot], &QComboBox::activated, this, [this, slot] {
+            const uint32_t encoded = keyCombo_[slot]->currentData().toUInt();
+            keyCodes_[slot] = encoded;
+#ifdef Q_OS_MACOS
+            if (channel_) {
+                channel_->setKey((uint8_t)slot, encoded); // staged: try it now
+                keysStatus_->setText(tr("Staged — try the key, then Save to keep it."));
+            }
+#endif
+            refreshReport();
+        });
+    }
+
+    auto *note = new QLabel(tr("Changes apply immediately for testing. “Save to knob” makes "
+                               "them permanent (they persist across power-off). The middle "
+                               "key’s hold-for-volume-layer is unaffected — you’re remapping "
+                               "its tap."));
+    note->setWordWrap(true);
+    note->setObjectName("secondary");
+    form->addRow(QString(), note);
+
+    layout->addWidget(keysBox_);
+
+    auto *buttonRow = new QHBoxLayout;
+    keysStatus_ = new QLabel;
+    keysStatus_->setObjectName("secondary");
+    buttonRow->addWidget(keysStatus_, 1);
+    auto *resetButton = new QPushButton(tr("Reset defaults"));
+    saveButton_ = new QPushButton(tr("Save to knob"));
+    saveButton_->setDefault(true);
+    buttonRow->addWidget(resetButton);
+    buttonRow->addWidget(saveButton_);
+    layout->addLayout(buttonRow);
+    layout->addStretch(1);
+
+#ifdef Q_OS_MACOS
+    connect(saveButton_, &QPushButton::clicked, this, [this] {
+        if (channel_) {
+            channel_->commit();
+        }
+    });
+    connect(resetButton, &QPushButton::clicked, this, [this] {
+        if (channel_) {
+            channel_->resetDefaults();
+            channel_->requestKeys();
+        }
+    });
+#else
+    Q_UNUSED(resetButton);
+#endif
+
+    onChannelPresent(false); // disabled until the channel reports in
+    return tab;
+}
+
 QWidget *SettingsWindow::buildDeviceTab() {
     auto *tab = new QWidget;
     auto *layout = new QVBoxLayout(tab);
 
     connectionLabel_ = new QLabel;
     layout->addWidget(connectionLabel_);
-
-    auto *firmwareBox = new QGroupBox(tr("On-device settings (keys, slide pot, detents)"));
-    auto *fwLayout = new QVBoxLayout(firmwareBox);
-    auto *fwNote = new QLabel(
-        tr("These live in the knob's firmware. Runtime editing from this panel arrives with "
-           "the settings channel (v0.2) — until then they're compiled in, shown below as "
-           "flashed."));
-    fwNote->setWordWrap(true);
-    fwLayout->addWidget(fwNote);
-    layout->addWidget(firmwareBox);
 
     reportView_ = new QPlainTextEdit;
     reportView_->setReadOnly(true);
@@ -187,14 +284,79 @@ QWidget *SettingsWindow::buildDeviceTab() {
     return tab;
 }
 
+void SettingsWindow::onChannelPresent(bool present) {
+    if (!keysBox_) {
+        return;
+    }
+    keysBox_->setEnabled(present);
+    if (saveButton_) {
+        saveButton_->setEnabled(present);
+    }
+    if (present) {
+        keysHint_->setText(tr("Connected over USB — key changes stage instantly."));
+        keysLoaded_ = false;
+#ifdef Q_OS_MACOS
+        if (channel_) {
+            channel_->requestKeys();
+        }
+#endif
+    } else {
+        keysHint_->setText(tr("🔌 Plug the knob in over USB to remap keys. (Scroll smoothing "
+                              "works over Bluetooth; the settings channel is USB for now.)"));
+    }
+    refreshBanner();
+    refreshReport();
+}
+
+void SettingsWindow::onKeyLoaded(int slot, uint32_t encoded) {
+    if (slot < 0 || slot >= 3) {
+        return;
+    }
+    keyCodes_[slot] = encoded;
+    keysLoaded_ = true;
+    const int idx = keyCombo_[slot]->findData(QVariant::fromValue(encoded));
+    if (idx >= 0) {
+        keyCombo_[slot]->setCurrentIndex(idx);
+    }
+    keysStatus_->setText(tr("Loaded from knob."));
+    refreshReport();
+}
+
+void SettingsWindow::onCommitted(bool ok) {
+    keysStatus_->setText(ok ? tr("✓ Saved to knob — survives power-off.")
+                            : tr("Save failed — check the USB connection."));
+}
+
 void SettingsWindow::setDeviceConnected(bool connected) {
     deviceConnected_ = connected;
+    refreshBanner();
     refreshReport();
 }
 
 void SettingsWindow::setRawCountsActive(bool active) {
     rawCounts_ = active;
+    refreshBanner();
     refreshReport();
+}
+
+void SettingsWindow::refreshBanner() {
+    if (!banner_) {
+        return;
+    }
+    if (deviceConnected_ && rawCounts_) {
+        banner_->setText(tr("● Knob connected — smooth scrolling active (raw counts)"));
+        banner_->setProperty("state", "good");
+    } else if (!deviceConnected_) {
+        banner_->setText(tr("○ Knob not connected — pair over Bluetooth or plug in USB"));
+        banner_->setProperty("state", "warn");
+    } else {
+        banner_->setText(tr("△ Running in fallback mode — grant Input Monitoring in System "
+                            "Settings → Privacy & Security for exact, acceleration-free "
+                            "scrolling, then relaunch"));
+        banner_->setProperty("state", "warn");
+    }
+    banner_->style()->unpolish(banner_);
+    banner_->style()->polish(banner_);
 }
 
 void SettingsWindow::emitChanged() {
@@ -226,16 +388,20 @@ QString SettingsWindow::buildReport() const {
                            ? QStringLiteral("raw HID (exact, acceleration-free)")
                            : QStringLiteral("intercepted events (OS curve!) — grant Input "
                                             "Monitoring"));
+    report += QStringLiteral("\n-- Keys (%1) --\n")
+                  .arg(keysLoaded_ ? QStringLiteral("live from knob")
+                                   : QStringLiteral("defaults; connect USB for live values"));
+    for (int i = 0; i < 3; i++) {
+        report += QStringLiteral("%1: %2\n")
+                      .arg(QString::fromUtf8(FirmwareDefaults::slotNames[i]), -17)
+                      .arg(keycodeLabelFor(keyCodes_[i]));
+    }
     report += QStringLiteral("\n-- Firmware (as flashed, compile-time) --\n");
     report += QStringLiteral("Haptic detents:   %1 /rev\n").arg(FirmwareDefaults::detentsPerRev);
     report += QStringLiteral("Wheel counts:     %1 /rev at x1\n").arg(FirmwareDefaults::linesPerRev);
-    report += QStringLiteral("Slide pot:        scroll speed, /%1 ... x%2, %3 travel\n")
+    report += QStringLiteral("Slide pot:        scroll speed, /%1 ... x%2\n")
                   .arg(FirmwareDefaults::wheelScaleMinDiv)
-                  .arg(FirmwareDefaults::wheelScaleMax)
-                  .arg(FirmwareDefaults::sliderCurvePower == 1 ? QStringLiteral("linear")
-                                                               : QStringLiteral("curved"));
-    report += QStringLiteral("Keys:             %1\n").arg(FirmwareDefaults::keys);
-    report += QStringLiteral("Layer 1:          %1\n").arg(FirmwareDefaults::layer1);
+                  .arg(FirmwareDefaults::wheelScaleMax);
     return report;
 }
 
@@ -249,8 +415,6 @@ void SettingsWindow::refreshReport() {
     }
 }
 
-// Both this app and LinearMouse transforming the knob at once feels wrong in
-// a way that's very hard to diagnose from the outside, so detect the overlap.
 void SettingsWindow::checkLinearMouseConflict() {
     const QString path = QDir::homePath() + "/.config/linearmouse/linearmouse.json";
     QFile file(path);

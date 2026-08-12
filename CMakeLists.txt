@@ -11,6 +11,7 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets)
 set(SOURCES
     src/main.cpp
     src/app/Config.h
+    src/app/Keycodes.h
     src/app/TrayApp.h
     src/app/TrayApp.cpp
     src/app/SettingsWindow.h
@@ -26,9 +27,11 @@ if(APPLE)
         src/engine/mac/MacScrollEngine.mm
         src/app/mac/MacTray.h
         src/app/mac/MacTray.mm
+        src/app/mac/KnobHidChannel.h
+        src/app/mac/KnobHidChannel.mm
     )
     set_source_files_properties(
-        src/engine/mac/MacScrollEngine.mm src/app/mac/MacTray.mm
+        src/engine/mac/MacScrollEngine.mm src/app/mac/MacTray.mm src/app/mac/KnobHidChannel.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
     )
 endif()
