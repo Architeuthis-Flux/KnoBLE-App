@@ -4,15 +4,21 @@
 #include "engine/ScrollEngine.h"
 
 #include <QObject>
-#include <QSystemTrayIcon>
 #include <memory>
 
+#ifdef Q_OS_MACOS
+class MacTray;
+#else
+#include <QSystemTrayIcon>
 class QAction;
 class QMenu;
+#endif
+
 class SettingsWindow;
 
 // Menu-bar presence and app wiring: owns the engine and the settings window,
-// marshals engine callbacks onto the GUI thread.
+// marshals engine callbacks onto the GUI thread. On macOS the tray itself is
+// native AppKit (see MacTray.h for why); elsewhere it's QSystemTrayIcon.
 class TrayApp : public QObject {
     Q_OBJECT
 
@@ -25,19 +31,26 @@ private slots:
     void onPermissionMissing();
 
 private:
-    void buildMenu();
     void startEngine();
     void openSettings();
-    QIcon makeIcon(bool connected) const;
+    void setEnabled(bool on);
+    void showStatus(const QString &text);
+    void showPermissionAction(bool visible);
 
     Config config_;
     ScrollEngineSettings settings_;
     std::unique_ptr<ScrollEngine> engine_;
+    SettingsWindow *settingsWindow_ = nullptr;
+
+#ifdef Q_OS_MACOS
+    std::unique_ptr<MacTray> tray_;
+#else
+    void buildMenu();
+    QIcon makeIcon(bool connected) const;
     QSystemTrayIcon tray_;
     QMenu *menu_ = nullptr;
     QAction *statusAction_ = nullptr;
     QAction *enabledAction_ = nullptr;
     QAction *permissionAction_ = nullptr;
-    SettingsWindow *settingsWindow_ = nullptr;
-    bool deviceConnected_ = false;
+#endif
 };

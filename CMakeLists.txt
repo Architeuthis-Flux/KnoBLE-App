@@ -21,7 +21,16 @@ set(SOURCES
 
 if(APPLE)
     enable_language(OBJCXX)
-    list(APPEND SOURCES src/engine/mac/MacScrollEngine.h src/engine/mac/MacScrollEngine.mm)
+    list(APPEND SOURCES
+        src/engine/mac/MacScrollEngine.h
+        src/engine/mac/MacScrollEngine.mm
+        src/app/mac/MacTray.h
+        src/app/mac/MacTray.mm
+    )
+    set_source_files_properties(
+        src/engine/mac/MacScrollEngine.mm src/app/mac/MacTray.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+    )
 endif()
 
 qt_add_executable(KnobApp MACOSX_BUNDLE ${SOURCES})
