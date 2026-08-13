@@ -44,20 +44,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Homebrew Qt, not aqt: the aqt macOS binaries drag in a reference to
+      # Apple's removed AGL framework at link time (seen on 6.7 AND 6.8);
+      # brew's build doesn't, and it matches the development environment.
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: "6.8.*"
+        run: brew install qt ninja
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
 
       - name: Build
         run: cmake --build build
 
       - name: Bundle + DMG (unsigned — sign/notarize locally for release)
         run: |
-          macdeployqt build/KnobApp.app -always-overwrite
+          "$(brew --prefix qt)/bin/macdeployqt" build/KnobApp.app -always-overwrite
           STAGE=$(mktemp -d)
           cp -R build/KnobApp.app "$STAGE/Knob.app"
           ln -s /Applications "$STAGE/Applications"
