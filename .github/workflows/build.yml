@@ -3,6 +3,7 @@ name: build
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -69,3 +70,35 @@ jobs:
         with:
           name: Knob-macos
           path: Knob.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Knob-windows
+          path: knob-windows
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Knob-macos
+          path: knob-macos
+
+      - name: Zip Windows build
+        run: cd knob-windows && zip -r ../Knob-windows.zip .
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Knob-windows.zip
+            knob-macos/Knob.dmg
+          body: |
+            **Knob companion app** for [BaselineDesign KNOB](https://baselinedesign.tech/products/knobv21) devices.
+
+            - **Knob-windows.zip** — unzip anywhere, run `Knob.exe` (tray app). Configurator only: keys + slide-pot mapping over USB. For smooth scrolling on Windows, flash the `knoble_hires` firmware ([KnoBLE](https://github.com/Architeuthis-Flux/KnoBLE)).
+            - **Knob.dmg** — macOS: smooth acceleration-free scrolling + full configurator. ⚠️ CI build, unsigned: right-click → Open on first launch, and grant Accessibility + Input Monitoring when prompted.
