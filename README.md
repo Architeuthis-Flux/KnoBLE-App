@@ -18,6 +18,8 @@ configurator-only: Windows honors the hi-res wheel firmware natively, so a
 host scroll engine would only duplicate what the OS already does well.
 Linux likewise needs no app for scrolling.
 
+**📦 Download: [Releases](https://github.com/Architeuthis-Flux/KnoBLE-App/releases)** — `Knob.dmg` (macOS) and `Knob-windows.zip` (Windows, unzip + run `Knob.exe`).
+
 ## Setup per platform
 
 | Platform | Scrolling | Keys & pot config |
