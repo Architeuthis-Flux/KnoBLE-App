@@ -33,6 +33,8 @@ public:
     // Per-role sensitivity: only the selected role's dial is updated.
     void setPotConfig(uint8_t role, uint8_t speedMax, uint8_t speedMinDiv, uint8_t steps);
     void requestPotValue(); // poll for the live slider position
+    void requestDozeConfig();
+    void setDozeConfig(uint16_t timeoutSeconds, uint8_t pollHz); // 0 s = never doze
 
 signals:
     void presentChanged(bool present);
@@ -41,6 +43,7 @@ signals:
     void committed(bool ok);
     void potConfigLoaded(int role, int speedMax, int speedMinDiv, int steps);
     void potValue(int raw, int role, int semantic);
+    void dozeConfigLoaded(int timeoutSeconds, int pollHz);
 
 private:
     // Reader-thread drop notification (queued to the GUI thread). Windows

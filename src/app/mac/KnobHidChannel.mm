@@ -21,6 +21,8 @@ enum Cmd : uint8_t {
     CmdGetPotCfg = 0x06,
     CmdSetPotCfg = 0x07,
     CmdGetPotValue = 0x08,
+    CmdGetDozeCfg = 0x09,
+    CmdSetDozeCfg = 0x0A,
 };
 } // namespace
 
@@ -84,6 +86,12 @@ struct KnobHidChannel::Impl {
         case CmdGetPotCfg:
             if (status == 0) {
                 emit owner->potConfigLoaded(frame[3], frame[4], frame[5], frame[6]);
+            }
+            break;
+        case CmdGetDozeCfg:
+            if (status == 0) {
+                const int timeoutS = frame[3] | (frame[4] << 8);
+                emit owner->dozeConfigLoaded(timeoutS, frame[5]);
             }
             break;
         case CmdGetPotValue:
@@ -196,4 +204,14 @@ void KnobHidChannel::setPotConfig(uint8_t role, uint8_t speedMax, uint8_t speedM
 
 void KnobHidChannel::requestPotValue() {
     impl_->send(CmdGetPotValue, nullptr, 0);
+}
+
+void KnobHidChannel::requestDozeConfig() {
+    impl_->send(CmdGetDozeCfg, nullptr, 0);
+}
+
+void KnobHidChannel::setDozeConfig(uint16_t timeoutSeconds, uint8_t pollHz) {
+    const uint8_t payload[3] = {(uint8_t)(timeoutSeconds & 0xFF),
+                                (uint8_t)(timeoutSeconds >> 8), pollHz};
+    impl_->send(CmdSetDozeCfg, payload, sizeof(payload));
 }

@@ -40,6 +40,7 @@ private slots:
     void onCommitted(bool ok);
     void onPotConfigLoaded(int role, int speedMax, int speedMinDiv, int steps);
     void onPotValue(int raw, int role, int semantic);
+    void onDozeConfigLoaded(int timeoutSeconds, int pollHz);
 
 private:
     QWidget *buildScrollingTab();
@@ -71,6 +72,13 @@ private:
     QLabel *keysHint_ = nullptr;
     QPushButton *saveButton_ = nullptr;
     QLabel *keysStatus_ = nullptr;
+
+    void sendDozeConfig();
+    QComboBox *dozeCombo_ = nullptr;
+    QSlider *dozeHzSlider_ = nullptr;
+    QLabel *dozeHzValue_ = nullptr;
+    int dozeTimeoutS_ = 120;
+    int dozeHz_ = 4;
 
     void sendPotConfig();
     void updatePotSensUi();

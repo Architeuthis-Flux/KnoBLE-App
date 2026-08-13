@@ -47,6 +47,8 @@ enum Cmd : uint8_t {
     CmdGetPotCfg = 0x06,
     CmdSetPotCfg = 0x07,
     CmdGetPotValue = 0x08,
+    CmdGetDozeCfg = 0x09,
+    CmdSetDozeCfg = 0x0A,
 };
 
 // Find the vendor collection's device path. Empty string if absent.
@@ -277,6 +279,14 @@ struct KnobHidChannel::Impl {
                     Qt::QueuedConnection);
             }
             break;
+        case CmdGetDozeCfg:
+            if (status == 0) {
+                const int timeoutS = frame[3] | (frame[4] << 8);
+                const int hz = frame[5];
+                QMetaObject::invokeMethod(
+                    o, [=] { emit o->dozeConfigLoaded(timeoutS, hz); }, Qt::QueuedConnection);
+            }
+            break;
         case CmdGetPotValue:
             if (status == 0) {
                 const int raw = frame[3] | (frame[4] << 8);
@@ -395,4 +405,14 @@ void KnobHidChannel::setPotConfig(uint8_t role, uint8_t speedMax, uint8_t speedM
 
 void KnobHidChannel::requestPotValue() {
     impl_->send(CmdGetPotValue, nullptr, 0);
+}
+
+void KnobHidChannel::requestDozeConfig() {
+    impl_->send(CmdGetDozeCfg, nullptr, 0);
+}
+
+void KnobHidChannel::setDozeConfig(uint16_t timeoutSeconds, uint8_t pollHz) {
+    const uint8_t payload[3] = {(uint8_t)(timeoutSeconds & 0xFF),
+                                (uint8_t)(timeoutSeconds >> 8), pollHz};
+    impl_->send(CmdSetDozeCfg, payload, sizeof(payload));
 }

@@ -106,6 +106,8 @@ SettingsWindow::SettingsWindow(ScrollEngineSettings initial, KnobHidChannel *cha
         connect(channel_, &KnobHidChannel::potConfigLoaded, this,
                 &SettingsWindow::onPotConfigLoaded);
         connect(channel_, &KnobHidChannel::potValue, this, &SettingsWindow::onPotValue);
+        connect(channel_, &KnobHidChannel::dozeConfigLoaded, this,
+                &SettingsWindow::onDozeConfigLoaded);
         potTimer_ = new QTimer(this);
         potTimer_->setInterval(400);
         connect(potTimer_, &QTimer::timeout, this, [this] {
@@ -303,6 +305,54 @@ QWidget *SettingsWindow::buildKeysTab() {
 
     layout->addWidget(potBox_);
 
+    // ---- Power: doze timing on battery ----
+    auto *powerBox = new QGroupBox(tr("Power (battery)"));
+    auto *powerForm = new QFormLayout(powerBox);
+    powerForm->setHorizontalSpacing(14);
+
+    dozeCombo_ = new QComboBox;
+    dozeCombo_->addItem(tr("30 seconds"), 30);
+    dozeCombo_->addItem(tr("1 minute"), 60);
+    dozeCombo_->addItem(tr("2 minutes"), 120);
+    dozeCombo_->addItem(tr("5 minutes"), 300);
+    dozeCombo_->addItem(tr("10 minutes"), 600);
+    dozeCombo_->addItem(tr("30 minutes"), 1800);
+    dozeCombo_->addItem(tr("Never"), 0);
+    dozeCombo_->setCurrentIndex(2);
+    powerForm->addRow(tr("Doze after"), dozeCombo_);
+
+    dozeHzSlider_ = new QSlider(Qt::Horizontal);
+    dozeHzSlider_->setRange(1, 10);
+    dozeHzSlider_->setValue(dozeHz_);
+    dozeHzValue_ = new QLabel;
+    dozeHzValue_->setMinimumWidth(80);
+    auto *dozeHzRow = new QHBoxLayout;
+    dozeHzRow->addWidget(dozeHzSlider_, 1);
+    dozeHzRow->addWidget(dozeHzValue_);
+    powerForm->addRow(tr("Wake check"), dozeHzRow);
+
+    auto *powerNote = new QLabel(tr("On battery, after this quiet period the knob naps: sensor "
+                                    "in low-power mode, LEDs off, checking a few times a second "
+                                    "for motion. Turning the wheel, moving a pot, or pressing a "
+                                    "key wakes it — worst case one check period. Faster checks "
+                                    "wake snappier; slower checks save power."));
+    powerNote->setWordWrap(true);
+    powerNote->setObjectName("secondary");
+    powerForm->addRow(QString(), powerNote);
+
+    layout->addWidget(powerBox);
+
+    connect(dozeCombo_, &QComboBox::activated, this, [this] {
+        dozeTimeoutS_ = dozeCombo_->currentData().toInt();
+        sendDozeConfig();
+    });
+    connect(dozeHzSlider_, &QSlider::valueChanged, this, [this](int v) {
+        dozeHz_ = v;
+        dozeHzValue_->setText(tr("%1 Hz").arg(v));
+        sendDozeConfig();
+    });
+    dozeHzValue_->setText(tr("%1 Hz").arg(dozeHz_));
+
     connect(potRoleCombo_, &QComboBox::activated, this, [this] {
         potRole_ = potRoleCombo_->currentData().toInt();
         updatePotSensUi();
@@ -396,6 +446,7 @@ void SettingsWindow::onChannelPresent(bool present) {
         if (channel_) {
             channel_->requestKeys();
             channel_->requestPotConfig();
+            channel_->requestDozeConfig();
         }
         if (potTimer_) {
             potTimer_->start();
@@ -494,6 +545,34 @@ void SettingsWindow::onPotValue(int raw, int role, int semantic) {
         }
         potValueLabel_->setText(text);
     }
+}
+
+void SettingsWindow::onDozeConfigLoaded(int timeoutSeconds, int pollHz) {
+    dozeTimeoutS_ = timeoutSeconds;
+    dozeHz_ = pollHz;
+    {
+        const QSignalBlocker blockCombo(dozeCombo_);
+        const int idx = dozeCombo_->findData(timeoutSeconds);
+        if (idx >= 0) {
+            dozeCombo_->setCurrentIndex(idx);
+        }
+    }
+    {
+        const QSignalBlocker blockHz(dozeHzSlider_);
+        dozeHzSlider_->setValue(qBound(1, pollHz, 10));
+        dozeHzValue_->setText(tr("%1 Hz").arg(pollHz));
+    }
+    refreshReport();
+}
+
+void SettingsWindow::sendDozeConfig() {
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+    if (channel_) {
+        channel_->setDozeConfig((uint16_t)dozeTimeoutS_, (uint8_t)dozeHz_);
+        keysStatus_->setText(tr("Staged — Save to keep it."));
+    }
+#endif
+    refreshReport();
 }
 
 void SettingsWindow::sendPotConfig() {
@@ -661,6 +740,11 @@ QString SettingsWindow::buildReport() const {
                       .arg(potLastRaw_)
                       .arg(potLastSemantic_);
     }
+    report += QStringLiteral("\n-- Power --\n");
+    report += QStringLiteral("Doze after:       %1\n")
+                  .arg(dozeTimeoutS_ == 0 ? QStringLiteral("never")
+                                          : QStringLiteral("%1 s").arg(dozeTimeoutS_));
+    report += QStringLiteral("Wake check:       %1 Hz\n").arg(dozeHz_);
     report += QStringLiteral("\n-- Firmware (as flashed, compile-time) --\n");
     report += QStringLiteral("Haptic detents:   %1 /rev\n").arg(FirmwareDefaults::detentsPerRev);
     report += QStringLiteral("Wheel counts:     %1 /rev at x1\n").arg(FirmwareDefaults::linesPerRev);
