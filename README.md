@@ -111,7 +111,7 @@ doesn't, the failure is almost certainly in device matching — file an
 issue with the output of Device Manager → knob → Hardware IDs.
 
 The scroll-feel research this implements lives in the
-[KnoBLE repo](https://github.com/BaselineDesign/KnoBLE)
+[KnoBLE repo](https://github.com/Architeuthis-Flux/KnoBLE)
 (`docs/scroll-feel-handoff.md`), including why firmware-only and
 LinearMouse-based approaches fall short. LinearMouse (MIT) served as the
 reference for the macOS event synthesis recipe.
